@@ -5,14 +5,33 @@ import sqlite3
 
 #找到当前文件（向上俩级目录）
 BASE_DIR = Path(__file__).resolve().parents[2]
-DB_PATH = Path(os.getenv("SRE_AGENT_DB_PATH", BASE_DIR / "sre_agent.db"))
+DEFAULT_DB_PATH = Path(os.getenv("SRE_AGENT_DB_PATH", BASE_DIR / "sre_agent.db"))
+DB_PATH = DEFAULT_DB_PATH
 
 #连接数据库
 def get_conn():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    global DB_PATH
+    DB_PATH = _resolve_db_path()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _resolve_db_path() -> Path:
+    candidates = [
+        DEFAULT_DB_PATH,
+        BASE_DIR / "sre_agent.db",
+        Path("/tmp/sre_agent.db"),
+    ]
+    for candidate in candidates:
+        try:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            with open(candidate, "a", encoding="utf-8"):
+                pass
+            return candidate
+        except OSError:
+            continue
+    raise OSError("unable to resolve writable sqlite database path")
 
 def init_db():
     conn = get_conn()

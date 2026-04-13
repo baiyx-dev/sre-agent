@@ -256,6 +256,7 @@ uvicorn backend.main:app --reload --port 8000
 
 - `render.yaml` 已默认把 SQLite 数据库路径设置为 `/var/data/sre_agent.db`
 - 已挂载持久化磁盘到 `/var/data`
+- 如果当前服务没有成功挂载可写磁盘，应用会自动回退到本地可写目录启动，但该模式不保证持久化
 - 如果不配置外部观测系统，应用仍可用内置基线数据启动
 
 ### 4. 完成部署
