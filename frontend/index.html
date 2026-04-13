@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SRE Agent</title>
+  <link rel="stylesheet" href="/frontend/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <h1>SRE Agent</h1>
+      <p class="desc">面向日常巡检、排障和变更确认的运维助手</p>
+
+      <div class="card">
+        <h3>常见操作</h3>
+        <ul>
+          <li>看看 prod-api 现在是否健康</li>
+          <li>prod-api 报警了，帮我快速排查</li>
+          <li>部署 prod-api 到 v1.2.3</li>
+          <li>回滚 prod-api</li>
+        </ul>
+      </div>
+
+      <details class="card collapse-card setup-card">
+        <summary>接入方式</summary>
+        <div class="collapse-body">
+          <p class="setup-copy">日常使用只需要添加服务地址，系统会自动做基础探测和排障。</p>
+          <p class="setup-copy">如果要接 Prometheus、Loki 或统一 SRE API，建议直接在后端环境变量里配置，不必在页面逐项填写。</p>
+          <button id="openOnboardingBtn" class="setup-btn">接入服务</button>
+        </div>
+      </details>
+
+      <details class="card collapse-card services-card">
+        <summary>当前可用服务</summary>
+        <div class="collapse-body">
+          <div id="knownServices" class="known-services">暂无</div>
+        </div>
+      </details>
+    </aside>
+
+    <main class="main">
+      <div class="chat-panel">
+        <div id="messages" class="messages"></div>
+
+        <div class="input-box">
+          <input id="messageInput" type="text" list="serviceNameOptions" placeholder="输入运维任务，例如：prod-api 报警了，帮我快速排查" />
+          <datalist id="serviceNameOptions"></datalist>
+          <button id="sendBtn">发送</button>
+        </div>
+      </div>
+
+      <div class="steps-panel">
+        <h2>处理过程</h2>
+        <div id="stepsContainer" class="steps-container">
+          <p class="empty">提交任务后，这里会展示本次处理过程和关键证据。</p>
+        </div>
+
+        <h2 class="timeline-title">近期记录</h2>
+        <div id="timelineContainer" class="timeline-container">
+          <p class="empty">暂无任务记录。</p>
+        </div>
+
+        <h2 class="timeline-title">事件复盘</h2>
+        <div id="postmortemContainer" class="postmortem-container">
+          <p class="empty">点击近期记录中的“查看复盘”生成事件摘要。</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="confirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
+    <div class="modal-card">
+      <h3 id="confirmModalTitle">高危操作确认</h3>
+      <p class="modal-risk">风险提示：回滚属于高危操作，请确认后再继续。</p>
+      <p class="modal-item">操作名称：<span id="modalActionType">-</span></p>
+      <p class="modal-item">目标服务：<span id="modalServiceName">-</span></p>
+      <p class="modal-item">策略评估：<span id="modalPolicySummary">-</span></p>
+      <div class="modal-actions">
+        <button id="modalConfirmBtn" class="btn-confirm">确认</button>
+        <button id="modalCancelBtn" class="btn-cancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="onboardingModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingModalTitle">
+    <div class="modal-card onboarding-card">
+      <h3 id="onboardingModalTitle">快速接入服务</h3>
+      <p class="onboarding-copy">填一个服务名和健康检查地址，就能开始做基础探测、状态查询和排障。</p>
+      <div class="target-row modal-target-row">
+        <input id="targetNameInput" type="text" placeholder="服务名，例如 prod-api" />
+        <input id="targetUrlInput" type="text" placeholder="服务地址，例如 https://api.example.com/health" />
+        <button id="addTargetBtn">添加监测</button>
+      </div>
+      <p id="dataApiBaseStatus" class="modal-status"></p>
+      <div class="onboarding-list-title">已接入目标</div>
+      <div id="targetsList" class="known-services modal-known-services">暂无已接入目标</div>
+      <div class="modal-actions">
+        <button id="onboardingCloseBtn" class="btn-cancel">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/frontend/app.js"></script>
+</body>
+</html>
