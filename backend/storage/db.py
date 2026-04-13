@@ -1,10 +1,11 @@
 from pathlib import Path
+import os
 
 import sqlite3
 
 #找到当前文件（向上俩级目录）
 BASE_DIR = Path(__file__).resolve().parents[2]
-DB_PATH = BASE_DIR / "sre_agent.db"
+DB_PATH = Path(os.getenv("SRE_AGENT_DB_PATH", BASE_DIR / "sre_agent.db"))
 
 #连接数据库
 def get_conn():

@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: sre-agent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: SRE_AGENT_DB_PATH
+        value: /var/data/sre_agent.db
+      - key: EXECUTION_GUARD_ENABLED
+        value: "false"
+    disk:
+      name: sre-agent-data
+      mountPath: /var/data
+      sizeGB: 1

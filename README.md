@@ -215,6 +215,59 @@ uvicorn backend.main:app --reload --port 8000
 启动后访问 [http://127.0.0.1:8000](http://127.0.0.1:8000)。
 
 
+## 部署到 Render
+
+仓库已包含 `render.yaml`，可以直接按 Blueprint 方式部署。
+
+### 1. 推送代码到 GitHub
+
+将当前项目推送到你的 GitHub 仓库。
+
+### 2. 在 Render 创建 Blueprint
+
+1. 打开 Render
+2. 选择 `New +`
+3. 选择 `Blueprint`
+4. 连接当前 GitHub 仓库
+5. Render 会自动识别仓库根目录下的 `render.yaml`
+
+### 3. 配置环境变量
+
+建议至少配置：
+
+- `DEEPSEEK_API_KEY`
+- `DEEPSEEK_API_BASE`
+- `DEEPSEEK_MODEL`
+
+可选配置：
+
+- `SRE_DATA_API_BASE`
+- `SRE_DATA_API_TOKEN`
+- `PROMETHEUS_BASE_URL`
+- `PROMETHEUS_TOKEN`
+- `LOKI_BASE_URL`
+- `LOKI_TOKEN`
+- `K8S_API_BASE`
+- `K8S_API_TOKEN`
+- `EXECUTION_GUARD_ENABLED`
+- `EXECUTION_GUARD_TOKEN`
+
+说明：
+
+- `render.yaml` 已默认把 SQLite 数据库路径设置为 `/var/data/sre_agent.db`
+- 已挂载持久化磁盘到 `/var/data`
+- 如果不配置外部观测系统，应用仍可用内置基线数据启动
+
+### 4. 完成部署
+
+Render 会执行：
+
+- `pip install -r requirements.txt`
+- `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
+
+部署完成后，直接访问 Render 分配的公网地址即可。
+
+
 ## 使用方式
 
 ### 1. 直接体验内置数据
