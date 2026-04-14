@@ -31,6 +31,11 @@ SRE Agent 是一个面向服务运维场景的 AI Copilot 项目。
 - 时间线与复盘
   - 保存每次任务、步骤和结果
   - 支持 timeline 和结构化 postmortem
+- 日志与异常处理
+  - 记录请求日志、错误日志和 request id
+  - 提供统一异常返回格式
+- 内部运行指标
+  - 提供成功率、错误率、平均响应时间和 P95 响应时间
 - Incident replay / benchmark
   - 内置基线故障场景
   - 支持单场景回放和批量 benchmark
@@ -110,6 +115,27 @@ benchmark 用于回放固定 incident 场景，验证系统在关键路径上的
 - policy recommended mode 命中
 
 
+### 6. Logging And Runtime Metrics
+
+应用在 HTTP 入口增加了统一的请求观测层。
+
+当前会记录：
+
+- `request_id`
+- 请求方法和路径
+- 状态码
+- 请求耗时
+- HTTPException 和未处理异常
+
+同时提供内部运行指标接口，用于查看：
+
+- 请求总数
+- 成功率 / 错误率
+- 平均响应时间
+- P95 响应时间
+- 运行时长
+
+
 ## 技术栈
 
 - Backend: `FastAPI`, `Pydantic`, `SQLite`
@@ -147,8 +173,76 @@ sre-agent/
 5. 工具层返回结构化事实数据
 6. 规则层和 LLM 共同生成结果
 7. 如果模型不可用，自动回退到规则结果
-8. 本次任务、步骤、评估和执行记录落到 SQLite
-9. 历史结果可通过 timeline、postmortem 和 benchmark 回看
+8. 请求日志、异常和运行指标会在入口统一记录
+9. 本次任务、步骤、评估和执行记录落到 SQLite
+10. 历史结果可通过 timeline、postmortem 和 benchmark 回看
+
+
+## 日志系统说明
+
+日志系统当前分为两层：
+
+### 1. 请求日志
+
+每个 HTTP 请求都会记录：
+
+- `request_id`
+- `method`
+- `path`
+- `status_code`
+- `duration_ms`
+
+这部分用于排查接口耗时、失败路径和用户请求链路。
+
+### 2. 异常日志
+
+对于业务异常和未处理异常，系统会统一记录：
+
+- 请求标识
+- 异常状态码
+- 异常详情
+- 请求路径
+
+未处理异常会额外写入完整堆栈，便于定位问题。
+
+
+## 异常处理流程
+
+系统当前采用统一异常处理流程：
+
+1. 请求进入中间件后生成 `request_id`
+2. 正常请求记录响应状态码和耗时
+3. 业务异常通过 `HTTPException` 返回统一 JSON 结构
+4. 未处理异常由全局异常处理器兜底，返回 `500`
+5. 所有异常响应都会带上 `request_id`，便于在日志里定位
+
+统一错误响应示例：
+
+```json
+{
+  "error": "request_failed",
+  "detail": "service not found",
+  "request_id": "7d5b8d1e-0c9d-4c8e-a5e2-5f0d0b3e51d1"
+}
+```
+
+
+## 运行指标
+
+项目提供内部运行指标接口：
+
+- `GET /internal/metrics`
+
+返回内容包括：
+
+- `request_count`
+- `success_count`
+- `error_count`
+- `success_rate_pct`
+- `error_rate_pct`
+- `avg_response_time_ms`
+- `p95_response_time_ms`
+- `uptime_seconds`
 
 
 ## 快速开始
@@ -357,6 +451,10 @@ payment-service 状态
 - `GET /benchmark/scenarios`
 - `GET /benchmark/replay/{scenario_id}`
 - `GET /benchmark/run`
+
+### Internal
+
+- `GET /internal/metrics`
 
 ### Settings
 

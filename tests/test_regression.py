@@ -6,12 +6,14 @@ from urllib.parse import parse_qs, urlparse
 import json
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from backend.api.routes_chat import chat, confirm_action
 from backend.api.routes_incidents import postmortem, timeline, deploy, rollback, benchmark_run, benchmark_replay, benchmark_scenarios
 from backend.schemas.chat import ChatRequest, ConfirmActionRequest
 from backend.api.routes_incidents import DeployRequest, RollbackRequest
 from backend.agents.intent_router import extract_entities
+from backend.main import app
 from backend.storage.db import init_db
 from backend.storage.repositories import get_chat_session_context
 from backend.storage.seed import seed_data
@@ -82,6 +84,28 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(data["generation_source"], "fallback_no_api_key")
         self.assertTrue(data["used_fallback"])
         self.assertEqual(data["fallback_reason"], "missing_api_key")
+
+    def test_internal_metrics_exposes_success_rate_and_response_time(self):
+        with TestClient(app) as client:
+            client.get("/services/")
+            resp = client.get("/internal/metrics")
+
+        self.assertEqual(resp.status_code, 200)
+        metrics = resp.json()["metrics"]
+        self.assertGreaterEqual(metrics["request_count"], 2)
+        self.assertIn("success_rate_pct", metrics)
+        self.assertIn("avg_response_time_ms", metrics)
+        self.assertIn("p95_response_time_ms", metrics)
+
+    def test_http_exception_returns_request_id_and_error_shape(self):
+        with TestClient(app) as client:
+            resp = client.get("/services/not-found-service")
+
+        self.assertEqual(resp.status_code, 404)
+        payload = resp.json()
+        self.assertEqual(payload["error"], "request_failed")
+        self.assertIn("request_id", payload)
+        self.assertIn("detail", payload)
 
     def test_chat_confirm_guard(self):
         req_data = chat(ChatRequest(message="回滚 payment-service")).model_dump()
