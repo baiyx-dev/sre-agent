@@ -313,6 +313,7 @@ class RegressionTests(unittest.TestCase):
             list(range(1, CURRENT_SCHEMA_VERSION + 1)),
         )
 
+    @unittest.skipIf(is_postgres_database(), "isolated SQLite path is used for audit ledger test")
     def test_audit_ledger_detects_tampering(self):
         previous_path = os.environ.get("SRE_AGENT_DB_PATH")
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -373,6 +374,7 @@ class RegressionTests(unittest.TestCase):
                 else:
                     os.environ["SRE_AGENT_DB_PATH"] = previous_path
 
+    @unittest.skipIf(is_postgres_database(), "isolated SQLite path is used for worker readiness test")
     def test_queued_readiness_requires_fresh_worker_heartbeat(self):
         previous_path = os.environ.get("SRE_AGENT_DB_PATH")
         os.environ["SRE_CHANGE_EXECUTION_MODE"] = "queued"
@@ -416,6 +418,7 @@ class RegressionTests(unittest.TestCase):
                 else:
                     os.environ["SRE_AGENT_DB_PATH"] = previous_path
 
+    @unittest.skipIf(is_postgres_database(), "isolated SQLite path is used for entitlement test")
     def test_plan_entitlements_cap_keys_and_gate_production_writes(self):
         previous_path = os.environ.get("SRE_AGENT_DB_PATH")
         previous_plan = os.environ.get("SRE_PLAN")
@@ -834,9 +837,17 @@ class RegressionTests(unittest.TestCase):
                 os.environ["EXECUTION_GUARD_TOKEN"] = "readiness-guard-key"
                 os.environ["SRE_ALLOW_INSECURE_DB_SECRETS"] = "false"
 
-                sqlite_not_ready = client.get("/health/ready")
-                self.assertEqual(sqlite_not_ready.status_code, 503)
-                self.assertFalse(sqlite_not_ready.json()["checks"]["production_database"])
+                database_readiness = client.get("/health/ready")
+                if is_postgres_database():
+                    self.assertEqual(database_readiness.status_code, 200)
+                    self.assertTrue(
+                        database_readiness.json()["checks"]["production_database"]
+                    )
+                else:
+                    self.assertEqual(database_readiness.status_code, 503)
+                    self.assertFalse(
+                        database_readiness.json()["checks"]["production_database"]
+                    )
 
                 os.environ["SRE_ALLOW_PRODUCTION_SQLITE"] = "true"
                 os.environ["SRE_REQUIRE_REAL_DATA_SOURCE"] = "false"
