@@ -4,6 +4,11 @@ import sys
 from urllib import error, request
 
 
+def normalize_headers(headers: dict) -> dict[str, str]:
+    """Return response headers with case-insensitive lookup keys."""
+    return {str(name).lower(): value for name, value in headers.items()}
+
+
 def call(
     base_url: str,
     path: str,
@@ -30,14 +35,15 @@ def call(
             raw = response.read().decode("utf-8")
             content_type = response.headers.get("Content-Type", "")
             body = json.loads(raw) if "json" in content_type else raw
-            return response.status, body, dict(response.headers.items())
+            headers = normalize_headers(dict(response.headers.items()))
+            return response.status, body, headers
     except error.HTTPError as exc:
         raw = exc.read().decode("utf-8")
         try:
             body = json.loads(raw)
         except json.JSONDecodeError:
             body = raw
-        return exc.code, body, dict(exc.headers.items())
+        return exc.code, body, normalize_headers(dict(exc.headers.items()))
 
 
 def require(condition: bool, message: str) -> None:
@@ -54,8 +60,8 @@ def main() -> None:
     checks = []
     live_status, live, live_headers = call(args.base_url, "/health/live")
     require(live_status == 200 and live.get("status") == "ok", "liveness failed")
-    require(len(live_headers.get("X-Trace-Id", "")) == 32, "trace id header missing")
-    require(live_headers.get("Traceparent", "").startswith("00-"), "traceparent missing")
+    require(len(live_headers.get("x-trace-id", "")) == 32, "trace id header missing")
+    require(live_headers.get("traceparent", "").startswith("00-"), "traceparent missing")
     checks.append("liveness_and_trace")
 
     ready_status, ready, _ = call(args.base_url, "/health/ready")

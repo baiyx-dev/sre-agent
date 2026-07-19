@@ -41,6 +41,7 @@ from backend.security_network import UnsafeOutboundUrl, validate_outbound_url
 from backend.storage.db import init_db
 from backend.storage.db import (
     CURRENT_SCHEMA_VERSION,
+    _PostgresCursor,
     _postgres_sql,
     get_schema_status,
     get_conn,
@@ -85,6 +86,7 @@ from backend.tools.external_data_source import (
     get_external_metrics,
     get_external_services,
 )
+from scripts.smoke_test import normalize_headers
 
 
 class MockHttpResponse:
@@ -269,6 +271,35 @@ class RegressionTests(unittest.TestCase):
             "information_schema.columns",
             _postgres_sql("PRAGMA table_info(task_runs)"),
         )
+
+    def test_postgres_cursor_translates_batch_statements(self):
+        class RecordingCursor:
+            def executemany(self, sql, params_seq):
+                self.sql = sql
+                self.params = list(params_seq)
+
+        raw_cursor = RecordingCursor()
+        cursor = _PostgresCursor(raw_cursor)
+        result = cursor.executemany(
+            "INSERT OR IGNORE INTO sample(value) VALUES (?)",
+            [("first",), ("second",)],
+        )
+
+        self.assertIs(result, cursor)
+        self.assertEqual(raw_cursor.params, [("first",), ("second",)])
+        self.assertIn("VALUES (%s)", raw_cursor.sql)
+        self.assertTrue(raw_cursor.sql.endswith("ON CONFLICT DO NOTHING"))
+
+    def test_smoke_response_headers_are_case_insensitive(self):
+        normalized = normalize_headers(
+            {
+                "X-Trace-ID": "a" * 32,
+                "TraceParent": "00-" + "a" * 32 + "-" + "b" * 16 + "-01",
+            }
+        )
+
+        self.assertEqual(normalized["x-trace-id"], "a" * 32)
+        self.assertTrue(normalized["traceparent"].startswith("00-"))
 
     def test_schema_migrations_are_current_and_idempotent(self):
         init_db()

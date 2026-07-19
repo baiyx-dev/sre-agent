@@ -104,6 +104,10 @@ class _PostgresCursor:
         self._cursor.execute(_postgres_sql(sql), params or ())
         return self
 
+    def executemany(self, sql: str, params_seq):
+        self._cursor.executemany(_postgres_sql(sql), params_seq)
+        return self
+
     def fetchone(self):
         return self._cursor.fetchone()
 
