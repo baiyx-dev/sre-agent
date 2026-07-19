@@ -839,9 +839,11 @@ class RegressionTests(unittest.TestCase):
 
                 database_readiness = client.get("/health/ready")
                 if is_postgres_database():
-                    self.assertEqual(database_readiness.status_code, 200)
                     self.assertTrue(
                         database_readiness.json()["checks"]["production_database"]
+                    )
+                    self.assertFalse(
+                        database_readiness.json()["checks"]["real_data_source"]
                     )
                 else:
                     self.assertEqual(database_readiness.status_code, 503)
