@@ -74,6 +74,86 @@ body {
   font-size: 16px;
 }
 
+.auth-card input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 6px 0;
+  padding: 9px 10px;
+  border: 1px solid #d6dce8;
+  border-radius: 8px;
+}
+
+.auth-status {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #667085;
+}
+
+.workspace-card {
+  margin-top: 16px;
+}
+
+.workspace-heading,
+.usage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.workspace-heading h3 {
+  margin: 0;
+}
+
+.plan-badge {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: rgba(37, 99, 235, 0.3);
+  color: #bfdbfe;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.workspace-name {
+  margin-top: 10px;
+  color: #f8fafc;
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.usage-row {
+  margin-top: 12px;
+  color: #cbd5e1;
+  font-size: 11px;
+}
+
+.usage-track {
+  height: 6px;
+  margin-top: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.24);
+}
+
+.usage-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: #22c55e;
+  transition: width 180ms ease;
+}
+
+.usage-bar.near-limit {
+  background: #f59e0b;
+}
+
+.workspace-hint {
+  margin: 7px 0 0;
+  color: #94a3b8;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
 .card ul {
   padding-left: 18px;
   margin-bottom: 0;

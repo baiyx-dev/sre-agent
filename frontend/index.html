@@ -12,6 +12,31 @@
       <h1>SRE Agent</h1>
       <p class="desc">面向日常巡检、排障和变更确认的运维助手</p>
 
+      <div class="card auth-card">
+        <h3>安全访问</h3>
+        <input id="apiKeyInput" type="password" autocomplete="off" placeholder="SRE API Key" />
+        <input id="guardTokenInput" type="password" autocomplete="off" placeholder="变更确认 Token（执行时需要）" />
+        <button id="connectApiBtn" class="setup-btn">连接</button>
+        <p id="authStatus" class="auth-status">尚未验证</p>
+      </div>
+
+      <div class="card workspace-card">
+        <div class="workspace-heading">
+          <h3>工作区</h3>
+          <span id="workspacePlan" class="plan-badge">-</span>
+        </div>
+        <div id="workspaceName" class="workspace-name">连接后显示</div>
+        <div class="usage-row">
+          <span>本月 API 请求</span>
+          <span id="workspaceUsageText">-</span>
+        </div>
+        <div class="usage-track" aria-hidden="true">
+          <div id="workspaceUsageBar" class="usage-bar"></div>
+        </div>
+        <p id="workspaceUsageHint" class="workspace-hint">额度按 UTC 自然月统计</p>
+        <p id="workspaceEntitlement" class="workspace-hint">套餐权限连接后显示</p>
+      </div>
+
       <div class="card">
         <h3>常见操作</h3>
         <ul>
@@ -72,7 +97,7 @@
   <div id="confirmModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle">
     <div class="modal-card">
       <h3 id="confirmModalTitle">高危操作确认</h3>
-      <p class="modal-risk">风险提示：回滚属于高危操作，请确认后再继续。</p>
+      <p class="modal-risk">风险提示：生产变更属于高危操作，请确认后再继续。</p>
       <p class="modal-item">操作名称：<span id="modalActionType">-</span></p>
       <p class="modal-item">目标服务：<span id="modalServiceName">-</span></p>
       <p class="modal-item">策略评估：<span id="modalPolicySummary">-</span></p>

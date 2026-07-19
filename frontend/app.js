@@ -32,6 +32,16 @@ const targetsListEl = document.getElementById("targetsList");
 const openOnboardingBtnEl = document.getElementById("openOnboardingBtn");
 const onboardingModalEl = document.getElementById("onboardingModal");
 const onboardingCloseBtnEl = document.getElementById("onboardingCloseBtn");
+const apiKeyInputEl = document.getElementById("apiKeyInput");
+const guardTokenInputEl = document.getElementById("guardTokenInput");
+const connectApiBtnEl = document.getElementById("connectApiBtn");
+const authStatusEl = document.getElementById("authStatus");
+const workspaceNameEl = document.getElementById("workspaceName");
+const workspacePlanEl = document.getElementById("workspacePlan");
+const workspaceUsageTextEl = document.getElementById("workspaceUsageText");
+const workspaceUsageBarEl = document.getElementById("workspaceUsageBar");
+const workspaceUsageHintEl = document.getElementById("workspaceUsageHint");
+const workspaceEntitlementEl = document.getElementById("workspaceEntitlement");
 
 const confirmModalEl = document.getElementById("confirmModal");
 const modalActionTypeEl = document.getElementById("modalActionType");
@@ -41,7 +51,81 @@ const modalConfirmBtnEl = document.getElementById("modalConfirmBtn");
 const modalCancelBtnEl = document.getElementById("modalCancelBtn");
 
 let currentPendingAction = null;
+let sreApiKey = "";
+let executionGuardToken = "";
 const chatSessionId = getOrCreateChatSessionId();
+
+try {
+  sreApiKey = window.sessionStorage.getItem("sre-agent-api-key") || "";
+} catch (error) {
+}
+if (apiKeyInputEl) apiKeyInputEl.value = sreApiKey;
+
+function apiFetch(resource, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (sreApiKey) headers.set("X-SRE-API-Key", sreApiKey);
+  return window.fetch(resource, { ...options, headers });
+}
+
+async function verifyAccess() {
+  try {
+    const response = await apiFetch("/auth/me");
+    const data = await response.json();
+    if (!response.ok) {
+      if (authStatusEl) authStatusEl.textContent = data.detail || "认证失败";
+      return false;
+    }
+    if (authStatusEl) authStatusEl.textContent = `已连接：${data.role} · ${data.workspace_id || "default"}`;
+    return true;
+  } catch (error) {
+    if (authStatusEl) authStatusEl.textContent = "无法连接后端";
+    return false;
+  }
+}
+
+async function fetchWorkspaceUsage() {
+  if (!workspaceNameEl || !workspaceUsageTextEl) return;
+  try {
+    const [workspaceResponse, usageResponse] = await Promise.all([
+      apiFetch("/workspace"),
+      apiFetch("/billing/usage"),
+    ]);
+    const workspaceData = await workspaceResponse.json();
+    const usageData = await usageResponse.json();
+    if (!workspaceResponse.ok || !usageResponse.ok) {
+      workspaceNameEl.textContent = usageData.detail || workspaceData.detail || "读取失败";
+      return;
+    }
+    const workspace = workspaceData.workspace || {};
+    const used = Number(usageData.requests_used || 0);
+    const limit = Number(usageData.monthly_request_limit || 0);
+    const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    workspaceNameEl.textContent = workspace.name || workspace.id || "default";
+    if (workspacePlanEl) workspacePlanEl.textContent = workspace.plan || usageData.plan || "-";
+    workspaceUsageTextEl.textContent = limit > 0
+      ? `${used.toLocaleString()} / ${limit.toLocaleString()}`
+      : `${used.toLocaleString()} / 不限`;
+    if (workspaceUsageBarEl) {
+      workspaceUsageBarEl.style.width = limit > 0 ? `${percent}%` : "0%";
+      workspaceUsageBarEl.classList.toggle("near-limit", limit > 0 && percent >= 80);
+    }
+    if (workspaceUsageHintEl) {
+      workspaceUsageHintEl.textContent = usageData.limit_reached
+        ? "额度已用尽；普通请求会返回 429"
+        : `UTC 月度额度${limit > 0 ? `，剩余 ${Math.max(0, limit - used).toLocaleString()}` : "，当前不限量"}`;
+    }
+    if (workspaceEntitlementEl) {
+      const entitlements = workspace.entitlements || usageData.entitlements || {};
+      const writeAccess = entitlements.production_writes
+        ? "含生产变更"
+        : "仅诊断与 dry-run";
+      const maxKeys = Number(entitlements.max_workspace_api_keys || 0);
+      workspaceEntitlementEl.textContent = `${writeAccess} · API Key ${maxKeys > 0 ? `最多 ${maxKeys} 把` : "不限"}`;
+    }
+  } catch (error) {
+    workspaceNameEl.textContent = "读取失败";
+  }
+}
 
 const intentLabels = {
   status_query: "状态检查",
@@ -113,6 +197,20 @@ function formatValue(value) {
   return `${value}`;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "-").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[char]);
+}
+
+function safeCssToken(value) {
+  return String(value || "unknown").replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
 function getStepTitle(action) {
   return stepActionLabels[action] || action || "处理步骤";
 }
@@ -130,29 +228,29 @@ function renderAssessmentCard(assessment) {
       <div class="assessment-header">
         <div>
           <div class="assessment-eyebrow">诊断视图</div>
-          <div class="assessment-summary">${assessment.summary || "-"}</div>
+          <div class="assessment-summary">${escapeHtml(assessment.summary || "-")}</div>
         </div>
         <div class="assessment-badges">
-          <span class="assessment-badge severity-${assessment.severity_assessment || "unknown"}">风险 ${assessment.severity_assessment || "-"}</span>
-          <span class="assessment-badge confidence-${assessment.confidence || "unknown"}">置信度 ${assessment.confidence || "-"}</span>
+          <span class="assessment-badge severity-${safeCssToken(assessment.severity_assessment)}">风险 ${escapeHtml(assessment.severity_assessment || "-")}</span>
+          <span class="assessment-badge confidence-${safeCssToken(assessment.confidence)}">置信度 ${escapeHtml(assessment.confidence || "-")}</span>
         </div>
       </div>
       <div class="assessment-grid">
         <div class="assessment-section">
           <div class="assessment-title">关键证据</div>
-          <ul>${evidence.map((item) => `<li>${item}</li>`).join("") || "<li>-</li>"}</ul>
+          <ul>${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>-</li>"}</ul>
         </div>
         <div class="assessment-section">
           <div class="assessment-title">根因候选</div>
-          <ul>${hypotheses.map((item) => `<li>${item.hypothesis}（${item.confidence}）: ${item.rationale}</li>`).join("") || "<li>-</li>"}</ul>
+          <ul>${hypotheses.map((item) => `<li>${escapeHtml(item.hypothesis)}（${escapeHtml(item.confidence)}）: ${escapeHtml(item.rationale)}</li>`).join("") || "<li>-</li>"}</ul>
         </div>
         <div class="assessment-section">
           <div class="assessment-title">缺失信号</div>
-          <ul>${missingSignals.map((item) => `<li>${item}</li>`).join("") || "<li>-</li>"}</ul>
+          <ul>${missingSignals.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>-</li>"}</ul>
         </div>
         <div class="assessment-section">
           <div class="assessment-title">建议下一步</div>
-          <ul>${nextActions.map((item) => `<li>${item}</li>`).join("") || "<li>-</li>"}</ul>
+          <ul>${nextActions.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>-</li>"}</ul>
         </div>
       </div>
     </div>
@@ -383,7 +481,7 @@ function renderTimeline(timeline) {
 
 function formatList(values) {
   if (!values || values.length === 0) return "-";
-  return values.join("；");
+  return values.map((value) => escapeHtml(value)).join("；");
 }
 
 function renderPostmortem(postmortem) {
@@ -399,17 +497,17 @@ function renderPostmortem(postmortem) {
     <div class="postmortem-grid">
       <div class="postmortem-section">
         <div class="postmortem-heading">事件概述</div>
-        <div class="postmortem-item">${postmortem.narrative_summary || postmortem.summary || "-"}</div>
+        <div class="postmortem-item">${escapeHtml(postmortem.narrative_summary || postmortem.summary || "-")}</div>
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">基础信息</div>
-        <div class="postmortem-item"><span class="postmortem-label">服务</span>${postmortem.service_name || "-"}</div>
-        <div class="postmortem-item"><span class="postmortem-label">事件类型</span>${postmortem.incident_type || "-"}</div>
-        <div class="postmortem-item"><span class="postmortem-label">当前状态</span>${postmortem.current_status || "-"}</div>
+        <div class="postmortem-item"><span class="postmortem-label">服务</span>${escapeHtml(postmortem.service_name || "-")}</div>
+        <div class="postmortem-item"><span class="postmortem-label">事件类型</span>${escapeHtml(postmortem.incident_type || "-")}</div>
+        <div class="postmortem-item"><span class="postmortem-label">当前状态</span>${escapeHtml(postmortem.current_status || "-")}</div>
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">影响范围</div>
-        <div class="postmortem-item">${impactSummary}</div>
+        <div class="postmortem-item">${escapeHtml(impactSummary)}</div>
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">现象</div>
@@ -417,7 +515,7 @@ function renderPostmortem(postmortem) {
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">疑似根因</div>
-        <div class="postmortem-item">${postmortem.likely_root_cause || "-"}</div>
+        <div class="postmortem-item">${escapeHtml(postmortem.likely_root_cause || "-")}</div>
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">已采取动作</div>
@@ -433,7 +531,7 @@ function renderPostmortem(postmortem) {
 
 async function fetchPostmortem(taskRunId) {
   try {
-    const response = await fetch(`/postmortem?task_run_id=${taskRunId}`);
+    const response = await apiFetch(`/postmortem?task_run_id=${taskRunId}`);
     const data = await response.json();
     if (!response.ok) {
       postmortemContainerEl.innerHTML = `<p class="empty">复盘生成失败。</p>`;
@@ -447,7 +545,7 @@ async function fetchPostmortem(taskRunId) {
 
 async function fetchTimeline() {
   try {
-    const response = await fetch("/timeline?limit=20");
+    const response = await apiFetch("/timeline?limit=20");
     const data = await response.json();
     if (!response.ok) {
       return;
@@ -460,18 +558,25 @@ async function fetchTimeline() {
 async function loadDataSourceConfig() {
   if (!dataApiBaseInputEl) return;
   try {
-    const response = await fetch("/settings/data-source");
+    const response = await apiFetch("/settings/data-source");
     const data = await response.json();
     if (!response.ok) return;
     dataApiBaseInputEl.value = data.sre_data_api_base || "";
+    const databaseSecretsAllowed = data.secret_storage_mode === "insecure_database_opt_in";
     if (dataApiTokenInputEl) {
-      dataApiTokenInputEl.value = data.sre_data_api_token || "";
+      dataApiTokenInputEl.value = "";
+      dataApiTokenInputEl.placeholder = databaseSecretsAllowed
+        ? (data.sre_data_api_token_configured ? "已配置；留空不修改" : "可选 Token")
+        : (data.sre_data_api_token_configured ? "已通过环境 Secret 配置" : "请通过环境 Secret 配置");
     }
     if (prometheusBaseInputEl) {
       prometheusBaseInputEl.value = data.prometheus_base_url || "";
     }
     if (prometheusTokenInputEl) {
-      prometheusTokenInputEl.value = data.prometheus_token || "";
+      prometheusTokenInputEl.value = "";
+      prometheusTokenInputEl.placeholder = databaseSecretsAllowed
+        ? (data.prometheus_token_configured ? "已配置；留空不修改" : "可选 Token")
+        : (data.prometheus_token_configured ? "已通过环境 Secret 配置" : "请通过环境 Secret 配置");
     }
     if (prometheusServiceLabelInputEl) {
       prometheusServiceLabelInputEl.value = data.prometheus_service_label || "";
@@ -480,7 +585,10 @@ async function loadDataSourceConfig() {
       lokiBaseInputEl.value = data.loki_base_url || "";
     }
     if (lokiTokenInputEl) {
-      lokiTokenInputEl.value = data.loki_token || "";
+      lokiTokenInputEl.value = "";
+      lokiTokenInputEl.placeholder = databaseSecretsAllowed
+        ? (data.loki_token_configured ? "已配置；留空不修改" : "可选 Token")
+        : (data.loki_token_configured ? "已通过环境 Secret 配置" : "请通过环境 Secret 配置");
     }
     if (lokiServiceLabelInputEl) {
       lokiServiceLabelInputEl.value = data.loki_service_label || "";
@@ -547,35 +655,36 @@ async function saveDataSourceConfig() {
   if (lokiBaseInputEl) {
     lokiBaseInputEl.value = lokiBaseValue;
   }
+  const payload = {
+    sre_data_api_base: baseValue || null,
+    prometheus_base_url: prometheusBaseValue || null,
+    prometheus_service_label: prometheusServiceLabelValue || null,
+    loki_base_url: lokiBaseValue || null,
+    loki_service_label: lokiServiceLabelValue || null,
+    prom_query_up: promQueryUpValue || null,
+    prom_query_replicas: promQueryReplicasValue || null,
+    prom_query_error_rate: promQueryErrorRateValue || null,
+    prom_query_cpu: promQueryCpuValue || null,
+    prom_query_memory: promQueryMemoryValue || null,
+    prom_query_latency_p95_ms: promQueryLatencyValue || null,
+    prom_alert_query: promAlertQueryValue || null,
+    loki_query_template: lokiQueryTemplateValue || null,
+  };
+  if (tokenValue) payload.sre_data_api_token = tokenValue;
+  if (prometheusTokenValue) payload.prometheus_token = prometheusTokenValue;
+  if (lokiTokenValue) payload.loki_token = lokiTokenValue;
   setConfigStatus("保存中...");
   try {
-    const response = await fetch("/settings/data-source", {
+    const response = await apiFetch("/settings/data-source", {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        sre_data_api_base: baseValue || null,
-        sre_data_api_token: tokenValue || null,
-        prometheus_base_url: prometheusBaseValue || null,
-        prometheus_token: prometheusTokenValue || null,
-        prometheus_service_label: prometheusServiceLabelValue || null,
-        loki_base_url: lokiBaseValue || null,
-        loki_token: lokiTokenValue || null,
-        loki_service_label: lokiServiceLabelValue || null,
-        prom_query_up: promQueryUpValue || null,
-        prom_query_replicas: promQueryReplicasValue || null,
-        prom_query_error_rate: promQueryErrorRateValue || null,
-        prom_query_cpu: promQueryCpuValue || null,
-        prom_query_memory: promQueryMemoryValue || null,
-        prom_query_latency_p95_ms: promQueryLatencyValue || null,
-        prom_alert_query: promAlertQueryValue || null,
-        loki_query_template: lokiQueryTemplateValue || null,
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await response.json();
     if (!response.ok || !data.ok) {
-      setConfigStatus("保存失败");
+      setConfigStatus(data.detail || "保存失败");
       return;
     }
     const configured = [
@@ -586,6 +695,7 @@ async function saveDataSourceConfig() {
     setConfigStatus(configured.length > 0
       ? `保存成功，已启用：${configured.join(" / ")}`
       : "已清空，后续请求将使用后端环境变量");
+    await loadDataSourceConfig();
     await fetchKnownServices();
   } catch (error) {
     setConfigStatus("保存失败");
@@ -619,7 +729,7 @@ async function testDataSourceConfig() {
   }
   setConfigStatus("测试中...");
   try {
-    const response = await fetch("/settings/data-source/test", {
+    const response = await apiFetch("/settings/data-source/test", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -662,7 +772,7 @@ async function testDataSourceConfig() {
 async function fetchKnownServices() {
   if (!knownServicesEl || !serviceNameOptionsEl) return;
   try {
-    const response = await fetch("/services/");
+    const response = await apiFetch("/services/");
     const data = await response.json();
     if (!response.ok) {
       knownServicesEl.textContent = "读取失败";
@@ -690,7 +800,7 @@ async function fetchKnownServices() {
 async function fetchTargets() {
   if (!targetsListEl) return;
   try {
-    const response = await fetch("/settings/targets");
+    const response = await apiFetch("/settings/targets");
     const data = await response.json();
     if (!response.ok) {
       targetsListEl.textContent = "读取失败";
@@ -713,12 +823,19 @@ async function fetchTargets() {
     } catch (error) {
     }
 
-    targetsListEl.innerHTML = targets
-      .map(
-        (t) =>
-          `<div class="target-item"><span>${t.name} -> ${t.base_url}</span><button data-target-name="${t.name}">删除</button></div>`
-      )
-      .join("");
+    targetsListEl.replaceChildren();
+    targets.forEach((target) => {
+      const row = document.createElement("div");
+      row.className = "target-item";
+      const label = document.createElement("span");
+      label.textContent = `${target.name} -> ${target.base_url}`;
+      const button = document.createElement("button");
+      button.textContent = "删除";
+      button.dataset.targetName = target.name;
+      row.appendChild(label);
+      row.appendChild(button);
+      targetsListEl.appendChild(row);
+    });
   } catch (error) {
     targetsListEl.textContent = "读取失败";
   }
@@ -735,7 +852,7 @@ async function addTarget() {
   targetUrlInputEl.value = baseUrl;
   setConfigStatus("添加中...");
   try {
-    const response = await fetch("/settings/targets", {
+    const response = await apiFetch("/settings/targets", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -761,7 +878,7 @@ async function addTarget() {
 async function deleteTarget(name) {
   if (!name) return;
   try {
-    const response = await fetch(`/settings/targets/${encodeURIComponent(name)}`, {
+    const response = await apiFetch(`/settings/targets/${encodeURIComponent(name)}`, {
       method: "DELETE",
     });
     const data = await response.json();
@@ -778,11 +895,11 @@ async function deleteTarget(name) {
 }
 
 async function executeConfirmedAction(pendingAction) {
-  const response = await fetch("/chat/confirm", {
+  const headers = { "Content-Type": "application/json" };
+  if (executionGuardToken) headers["X-Guard-Token"] = executionGuardToken;
+  const response = await apiFetch("/chat/confirm", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       session_id: chatSessionId,
       pending_action: pendingAction,
@@ -800,7 +917,52 @@ async function executeConfirmedAction(pendingAction) {
   appendMessage("assistant", data.final_answer || "没有返回结果");
   renderSteps(data.steps || [], data.assessment_details || null);
   appendAnalysisNote(data);
+  if (data.execution_mode === "queued" && data.change_request_id) {
+    await waitForChangeCompletion(data.change_request_id);
+  }
   await fetchTimeline();
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForChangeCompletion(changeRequestId) {
+  const terminalStatuses = new Set([
+    "executed",
+    "dry_run",
+    "denied",
+    "failed",
+    "unknown",
+    "cancelled",
+    "expired",
+  ]);
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await delay(1000);
+    try {
+      const response = await apiFetch(`/changes/${encodeURIComponent(changeRequestId)}`);
+      const data = await response.json();
+      if (!response.ok) {
+        appendMessage("assistant", data.detail || "变更状态查询失败");
+        return;
+      }
+      const changeRequest = data.change_request || {};
+      if (!terminalStatuses.has(changeRequest.status)) continue;
+
+      const result = changeRequest.result || {};
+      appendMessage(
+        "assistant",
+        result.final_answer || `变更请求已结束，状态：${changeRequest.status}`,
+      );
+      renderSteps(result.steps || [], result.assessment_details || null);
+      appendAnalysisNote(result);
+      return;
+    } catch (error) {
+      appendMessage("assistant", "变更状态查询失败，请稍后在变更记录中查看。");
+      return;
+    }
+  }
+  appendMessage("assistant", "变更仍在执行中，请稍后查询变更记录。");
 }
 
 async function sendMessage() {
@@ -811,7 +973,7 @@ async function sendMessage() {
   messageInputEl.value = "";
 
   try {
-    const response = await fetch("/chat", {
+    const response = await apiFetch("/chat", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -921,7 +1083,35 @@ if (targetsListEl) {
   });
 }
 
-loadDataSourceConfig();
-fetchTargets();
-fetchKnownServices();
-fetchTimeline();
+async function connectAndLoad() {
+  sreApiKey = apiKeyInputEl ? apiKeyInputEl.value.trim() : "";
+  executionGuardToken = guardTokenInputEl ? guardTokenInputEl.value.trim() : "";
+  try {
+    if (sreApiKey) {
+      window.sessionStorage.setItem("sre-agent-api-key", sreApiKey);
+    } else {
+      window.sessionStorage.removeItem("sre-agent-api-key");
+    }
+  } catch (error) {
+  }
+
+  if (!(await verifyAccess())) return;
+  await Promise.all([
+    loadDataSourceConfig(),
+    fetchTargets(),
+    fetchKnownServices(),
+    fetchTimeline(),
+    fetchWorkspaceUsage(),
+  ]);
+}
+
+if (connectApiBtnEl) {
+  connectApiBtnEl.addEventListener("click", connectAndLoad);
+}
+if (apiKeyInputEl) {
+  apiKeyInputEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") connectAndLoad();
+  });
+}
+
+connectAndLoad();

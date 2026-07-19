@@ -4,6 +4,8 @@ from urllib import error, request
 
 from dotenv import load_dotenv
 
+from backend.services.llm_usage_service import record_llm_usage
+
 load_dotenv()
 
 
@@ -42,6 +44,7 @@ def _request_chat_completion(messages: list, temperature: float = 0.2) -> dict:
         with request.urlopen(req, timeout=8) as resp:
             raw = resp.read().decode("utf-8")
             data = json.loads(raw)
+            record_llm_usage("deepseek", model, data.get("usage"))
             content = data["choices"][0]["message"]["content"].strip()
             if not content:
                 return {

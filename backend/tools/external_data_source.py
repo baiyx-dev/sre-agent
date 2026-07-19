@@ -6,7 +6,9 @@ from urllib import error, parse, request
 
 from dotenv import load_dotenv
 
-from backend.storage.repositories import get_app_setting
+from backend.storage.repositories import get_app_setting, list_monitored_targets
+from backend.security_network import UnsafeOutboundUrl, validate_outbound_url
+from backend.security_secrets import SECRET_SETTING_KEYS, get_runtime_secret
 from backend.tools.target_probe import (
     get_target_alerts,
     get_target_logs,
@@ -32,10 +34,42 @@ DEFAULT_LOKI_QUERY_TEMPLATE = '{{{label}="{service_name}"}}'
 
 
 def _get_config(key: str, default: str | None = None) -> str | None:
+    if key in SECRET_SETTING_KEYS:
+        return get_runtime_secret(key) or default
     value = get_app_setting(key)
     if value is not None:
         return value
     return os.getenv(key, default)
+
+
+def data_source_configuration_status() -> dict:
+    candidates = {
+        "sre_api": _get_config("SRE_DATA_API_BASE"),
+        "prometheus": _get_config("PROMETHEUS_BASE_URL"),
+        "loki": _get_config("LOKI_BASE_URL"),
+        "kubernetes": _get_config("K8S_API_BASE"),
+    }
+    configured = []
+    unsafe = []
+    for name, value in candidates.items():
+        if not value:
+            continue
+        try:
+            validate_outbound_url(value)
+            configured.append(name)
+        except UnsafeOutboundUrl:
+            unsafe.append(name)
+    try:
+        target_count = len(list_monitored_targets())
+    except Exception:
+        target_count = 0
+    return {
+        "configured_sources": configured,
+        "configured_source_count": len(configured),
+        "unsafe_sources": unsafe,
+        "monitored_target_count": target_count,
+        "has_real_data_source": bool(configured),
+    }
 
 
 def _normalize_service(item: dict) -> dict | None:
@@ -141,6 +175,11 @@ def _request_json_absolute(base_url: str | None, path: str, query: dict | None =
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        validate_outbound_url(url)
+    except UnsafeOutboundUrl:
+        return None
 
     req = request.Request(url, headers=headers, method="GET")
 

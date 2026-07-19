@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sre_agent
+      POSTGRES_USER: sre_agent
+      POSTGRES_PASSWORD: local-sre-agent-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sre_agent -d sre_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  sre-agent:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    environment:
+      SRE_ENVIRONMENT: development
+      SRE_AUTH_ENABLED: "false"
+      EXECUTION_GUARD_ENABLED: "false"
+      SRE_ALLOW_INSECURE_DB_SECRETS: "false"
+      SRE_OUTBOUND_HOST_ALLOWLIST: host.docker.internal
+      DATABASE_URL: postgresql://sre_agent:local-sre-agent-password@postgres:5432/sre_agent
+      SRE_CHANGE_EXECUTION_MODE: queued
+      SRE_CHANGE_EXECUTOR: simulation
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  change-worker:
+    build:
+      context: .
+    command: ["python", "-m", "backend.worker"]
+    environment:
+      DATABASE_URL: postgresql://sre_agent:local-sre-agent-password@postgres:5432/sre_agent
+      SRE_CHANGE_EXECUTOR: simulation
+      SRE_CHANGE_JOB_MAX_ATTEMPTS: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

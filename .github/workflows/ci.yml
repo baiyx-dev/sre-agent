@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: python -m pip install --requirement requirements.txt
+      - name: Verify dependency environment
+        run: python -m pip check
+      - name: Compile Python
+        run: python -m compileall -q backend tests
+      - name: Upgrade and verify SQLite schema
+        run: |
+          python -m backend.migrations upgrade
+          python -m backend.migrations status --require-current
+      - name: Check frontend JavaScript
+        run: node --check frontend/app.js
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Process-level smoke and bounded load baseline
+        env:
+          SRE_AUTH_ENABLED: "true"
+          SRE_ADMIN_API_KEY: ci-admin-key
+          EXECUTION_GUARD_ENABLED: "true"
+          EXECUTION_GUARD_TOKEN: ci-guard-key
+          SRE_CHANGE_EXECUTION_MODE: queued
+        run: |
+          python -m backend.worker > /tmp/sre-agent-worker.log 2>&1 &
+          worker_pid=$!
+          python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 > /tmp/sre-agent.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" "$worker_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:8000/health/ready >/dev/null && break
+            sleep 1
+          done
+          python scripts/smoke_test.py --api-key ci-admin-key
+          python scripts/load_smoke.py --api-key ci-admin-key --requests 100 --concurrency 10 --max-p95-ms 1000
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Audit Python dependencies
+        run: |
+          python -m pip install pip-audit
+          python -m pip_audit --requirement requirements.txt
+
+  postgres-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: sre_agent_test
+          POSTGRES_USER: sre_agent
+          POSTGRES_PASSWORD: regression-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sre_agent -d sre_agent_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql://sre_agent:regression-password@127.0.0.1:5432/sre_agent_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install --requirement requirements.txt
+      - name: Upgrade and verify PostgreSQL schema
+        run: |
+          python -m backend.migrations upgrade
+          python -m backend.migrations status --require-current
+      - name: Run regression suite on PostgreSQL
+        run: python -m unittest discover -s tests -v
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build --tag sre-agent:ci .
+      - name: Verify non-root runtime user
+        run: test "$(docker run --rm --entrypoint id sre-agent:ci -u)" != "0"

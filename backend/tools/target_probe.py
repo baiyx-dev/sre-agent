@@ -2,9 +2,14 @@ from datetime import datetime
 from urllib import error, request
 
 from backend.storage.repositories import get_monitored_target, list_monitored_targets
+from backend.security_network import UnsafeOutboundUrl, validate_outbound_url
 
 
 def _probe_target(url: str) -> tuple[str, float | None, str | None]:
+    try:
+        validate_outbound_url(url)
+    except UnsafeOutboundUrl:
+        return "down", None, "blocked_target"
     req = request.Request(url, headers={"Accept": "*/*"}, method="GET")
     try:
         with request.urlopen(req, timeout=5) as resp:
