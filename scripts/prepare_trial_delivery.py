@@ -9,12 +9,20 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.generate_trial_env import (
-    generate_trial_environment,
-    read_trial_environment,
-    validate_upgrade_contact_url,
-    write_trial_environment,
-)
+try:
+    from scripts.generate_trial_env import (
+        generate_trial_environment,
+        read_trial_environment,
+        validate_upgrade_contact_url,
+        write_trial_environment,
+    )
+except ModuleNotFoundError:
+    from generate_trial_env import (
+        generate_trial_environment,
+        read_trial_environment,
+        validate_upgrade_contact_url,
+        write_trial_environment,
+    )
 
 
 DELIVERY_SCHEMA_VERSION = 1

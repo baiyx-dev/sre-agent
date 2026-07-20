@@ -181,19 +181,25 @@ jobs:
             --confirm-disposable-instance
       - name: Show local trial logs on failure
         if: failure()
-        run: >-
-          docker compose
-          --project-name sre-trial-ci-trial
-          --env-file .trial-deliveries/ci-trial/.env.trial.local
-          -f compose.yaml
-          -f compose.trial.yaml
-          logs --no-color
+        run: |
+          if test -f .trial-deliveries/ci-trial/.env.trial.local; then
+            docker compose \
+              --project-name sre-trial-ci-trial \
+              --env-file .trial-deliveries/ci-trial/.env.trial.local \
+              -f compose.yaml \
+              -f compose.trial.yaml \
+              logs --no-color
+          else
+            echo "Trial delivery was not created; no Compose logs are available."
+          fi
       - name: Remove the disposable local trial stack
         if: always()
-        run: >-
-          docker compose
-          --project-name sre-trial-ci-trial
-          --env-file .trial-deliveries/ci-trial/.env.trial.local
-          -f compose.yaml
-          -f compose.trial.yaml
-          down --volumes --remove-orphans
+        run: |
+          if test -f .trial-deliveries/ci-trial/.env.trial.local; then
+            docker compose \
+              --project-name sre-trial-ci-trial \
+              --env-file .trial-deliveries/ci-trial/.env.trial.local \
+              -f compose.yaml \
+              -f compose.trial.yaml \
+              down --volumes --remove-orphans
+          fi

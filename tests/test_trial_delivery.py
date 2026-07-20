@@ -167,8 +167,11 @@ class TrialDeliveryTests(unittest.TestCase):
             result = subprocess.run(
                 [
                     sys.executable,
-                    "-m",
-                    "scripts.prepare_trial_delivery",
+                    str(
+                        Path(__file__).parents[1]
+                        / "scripts"
+                        / "prepare_trial_delivery.py"
+                    ),
                     "create",
                     "--workspace-id",
                     "customer-cli",
