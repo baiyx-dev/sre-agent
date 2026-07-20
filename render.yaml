@@ -56,6 +56,14 @@ services:
         value: trialing
       - key: SRE_TRIAL_DAYS
         value: "14"
+      - key: SRE_TRIAL_START_MODE
+        value: activation
+      - key: SRE_TRIAL_SELF_SERVICE_ENABLED
+        value: "true"
+      - key: SRE_TRIAL_ACTIVATION_TOKEN
+        sync: false
+      - key: SRE_UPGRADE_CONTACT_URL
+        sync: false
       - key: SRE_TRIAL_ENDS_AT
         sync: false
       - key: SRE_CURRENT_PERIOD_END
@@ -144,6 +152,11 @@ services:
           name: sre-agent
           type: web
           envVarKey: SRE_TRIAL_DAYS
+      - key: SRE_TRIAL_START_MODE
+        fromService:
+          name: sre-agent
+          type: web
+          envVarKey: SRE_TRIAL_START_MODE
       - key: SRE_TRIAL_ENDS_AT
         fromService:
           name: sre-agent

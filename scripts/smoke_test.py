@@ -94,6 +94,19 @@ def main() -> None:
     )
     checks.append("subscription_access")
 
+    trial_status, trial_onboarding, _ = call(
+        args.base_url,
+        "/trial/onboarding",
+        api_key=args.api_key,
+    )
+    require(
+        trial_status == 200
+        and isinstance(trial_onboarding.get("milestones"), list)
+        and trial_onboarding.get("total_milestones") == 5,
+        f"trial onboarding failed: {trial_onboarding}",
+    )
+    checks.append("trial_onboarding")
+
     statement_status, statement_preview, _ = call(
         args.base_url,
         "/billing/statements/preview?month=2000-01",

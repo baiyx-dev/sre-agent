@@ -13,6 +13,10 @@ from backend.services.commercial_service import (
 )
 from backend.logging_config import logging_configuration_status
 from backend.services.change_request_service import production_writes_enabled
+from backend.services.trial_service import (
+    public_trial_status,
+    trial_activation_configuration_status,
+)
 from backend.storage.repositories import worker_heartbeat_status
 from backend.tools.external_data_source import data_source_configuration_status
 
@@ -53,10 +57,19 @@ def readiness(response: Response):
     production_write_enabled = production_writes_enabled()
     write_entitled = production_write_entitled()
     data_sources = data_source_configuration_status()
+    try:
+        trial_activation = trial_activation_configuration_status()
+        trial_public = public_trial_status()
+    except Exception:
+        trial_activation = {"enabled": False, "configured": False}
+        trial_public = {"claim_available": False, "claimed": False}
     require_real_data_source = os.getenv(
         "SRE_REQUIRE_REAL_DATA_SOURCE",
         "true" if production else "false",
     ).strip().lower() in {"1", "true", "yes", "on"}
+    trial_data_source_onboarding_grace = bool(
+        trial_activation["enabled"] and workspace.get("plan") == "trial"
+    )
     database_backend = database_backend_name()
     allow_production_sqlite = os.getenv(
         "SRE_ALLOW_PRODUCTION_SQLITE",
@@ -84,7 +97,11 @@ def readiness(response: Response):
         or database_backend == "postgresql"
         or allow_production_sqlite,
         "authentication": (not auth["enabled"] and not production)
-        or (auth["enabled"] and auth["configured"]),
+        or (
+            auth["enabled"]
+            and (auth["configured"] or trial_public["claim_available"])
+        ),
+        "trial_activation": trial_activation["configured"] or trial_public["claimed"],
         "execution_guard": (not guard["enabled"] and not production)
         or (guard["enabled"] and guard["token_configured"]),
         "secret_storage": not (production and insecure_database_secrets_enabled()),
@@ -107,6 +124,7 @@ def readiness(response: Response):
         not in {"configuration_error", "unavailable"},
         "logging": log_configuration["valid"],
         "real_data_source": (not require_real_data_source)
+        or trial_data_source_onboarding_grace
         or data_sources["has_real_data_source"],
     }
     ready = all(checks.values())
@@ -123,6 +141,9 @@ def readiness(response: Response):
             "application_schema_version": schema["current_version"],
             "production_sqlite_override": allow_production_sqlite,
             "authentication_enabled": auth["enabled"],
+            "trial_self_service_enabled": trial_activation["enabled"],
+            "trial_claim_available": trial_public["claim_available"],
+            "trial_claimed": trial_public["claimed"],
             "execution_guard_enabled": guard["enabled"],
             "change_executor_mode": executor["mode"],
             "production_write_enabled": production_write_enabled,
@@ -141,6 +162,7 @@ def readiness(response: Response):
             "log_format": log_configuration["format"],
             "log_level": log_configuration["level"],
             "require_real_data_source": require_real_data_source,
+            "trial_data_source_onboarding_grace": trial_data_source_onboarding_grace,
             "configured_data_sources": data_sources["configured_sources"],
             "unsafe_data_sources": data_sources["unsafe_sources"],
             "monitored_target_count": data_sources["monitored_target_count"],

@@ -62,9 +62,11 @@ Worker 使用原子领取和租约恢复。只有执行器支持幂等键时才�
 
 ## 试用、续费与停用
 
-trial 首次初始化时根据 `SRE_TRIAL_DAYS` 固化到期时间，或采用明确的 `SRE_TRIAL_ENDS_AT`；后续重启不会自动顺延。管理员通过 `/billing/subscription` 检查有效状态和配置变更事件。试用到期、订阅暂停或付款宽限期结束后，业务 API 返回 402；`/auth/me`、`/workspace`、监控与 `/billing/*` 保持可用，便于导出证据和恢复订阅。
+trial 默认在首次初始化时根据 `SRE_TRIAL_DAYS` 固化到期时间，或采用明确的 `SRE_TRIAL_ENDS_AT`。邀请制免费试用设置 `SRE_TRIAL_START_MODE=activation`、`SRE_TRIAL_SELF_SERVICE_ENABLED=true` 和每客户唯一的高强度 `SRE_TRIAL_ACTIVATION_TOKEN`；新工作区先保持 `pending_activation`，领取事务成功后才开始计时并签发首把 admin Key。后续重启不会自动顺延。完整领取、密钥丢失恢复、反馈和隐私流程见 [FREE_TRIAL.md](FREE_TRIAL.md)。
 
-升级时同时修改 Web 的 `SRE_PLAN`、`SRE_SUBSCRIPTION_STATUS=active` 与 `SRE_MONTHLY_REQUEST_LIMIT` 后重新部署。付款逾期或周期末取消时，把状态设为 `past_due` 或 `canceled`，并用 `SRE_CURRENT_PERIOD_END` 指定 UTC 宽限边界。Web 与 Worker 必须使用完全相同的工作区和订阅配置；`render.yaml` 已通过 `fromService` 强制继承。完整状态语义见 [SUBSCRIPTION_LIFECYCLE.md](SUBSCRIPTION_LIFECYCLE.md)。
+管理员通过 `/trial/conversion-metrics` 检查领取、接入、首次查询、首次诊断、time-to-first-value、反馈与付费意向，通过 `/billing/subscription` 检查状态变更事件。试用到期、订阅暂停或付款宽限期结束后，业务 API 返回 402；`/auth/me`、`/workspace`、监控、`/billing/*` 与 `/trial/*` 保持可用，便于导出证据、提交反馈和恢复订阅。
+
+当前升级仍为人工流程：取得明确联系授权后，通过 `SRE_UPGRADE_CONTACT_URL` 约定合同，再同时修改 Web 的 `SRE_PLAN`、`SRE_SUBSCRIPTION_STATUS=active` 与 `SRE_MONTHLY_REQUEST_LIMIT` 后重新部署。支付和自动开票尚未实现，不得对用户宣称在线付款已可用。付款逾期或周期末取消时，把状态设为 `past_due` 或 `canceled`，并用 `SRE_CURRENT_PERIOD_END` 指定 UTC 宽限边界。Web 与 Worker 必须使用完全相同的工作区和订阅配置；`render.yaml` 已通过 `fromService` 强制继承。完整状态语义见 [SUBSCRIPTION_LIFECYCLE.md](SUBSCRIPTION_LIFECYCLE.md)。
 
 环境 Bootstrap Key 仅用于首次创建密钥和账户恢复。生产已有工作区密钥后，Bootstrap Key 不能调用服务、聊天、Incident 或变更业务接口；日常请求必须使用可撤销、可计量的工作区 Key。
 
@@ -97,7 +99,7 @@ python -m backend.maintenance purge
 python -m backend.maintenance purge --apply --confirm PURGE:<workspace-id>
 ```
 
-清理在单一事务中按子表到主表顺序执行；确认字符串必须与当前工作区完全一致。默认保留日志 30 天、会话 90 天、任务 180 天、用量 400 天、Incident/变更 730 天、执行审计 7 年，可通过 `SRE_RETENTION_*_DAYS` 调整。生产用量清理还要求所有受影响月份已生成账单快照。审计清理只删除已过期的连续链前缀，并在同一事务写入链头 checkpoint；清理前若 `/audit/verify` 失败，操作会拒绝执行。归档必须同时保存导出的审计和当时的链头。
+清理在单一事务中按子表到主表顺序执行；确认字符串必须与当前工作区完全一致。默认保留日志 30 天、会话 90 天、任务 180 天、用量 400 天、Incident/变更 730 天、试用激活失败 30 天、试用反馈 730 天、执行审计 7 年，可通过 `SRE_RETENTION_*_DAYS` 调整。试用激活事实不会随普通保留任务删除。生产用量清理还要求所有受影响月份已生成账单快照。审计清理只删除已过期的连续链前缀，并在同一事务写入链头 checkpoint；清理前若 `/audit/verify` 失败，操作会拒绝执行。归档必须同时保存导出的审计和当时的链头。
 
 ## 审计链校验
 

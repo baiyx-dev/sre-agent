@@ -25,6 +25,7 @@ MIGRATION_MANIFEST = (
     (8, "pilot_value_outcomes", "2026-07-20-commercial-v8"),
     (9, "subscription_lifecycle", "2026-07-20-commercial-v9"),
     (10, "immutable_billing_statements", "2026-07-20-commercial-v10"),
+    (11, "self_service_trial_activation", "2026-07-20-commercial-v11"),
 )
 CURRENT_SCHEMA_VERSION = MIGRATION_MANIFEST[-1][0]
 _POSTGRES_MIGRATION_LOCK_ID = 7_361_904_211
@@ -624,6 +625,7 @@ def _initialize_schema(conn, cur):
         plan TEXT NOT NULL,
         status TEXT NOT NULL,
         subscription_status TEXT,
+        trial_activated_at TEXT,
         trial_ends_at TEXT,
         current_period_end TEXT,
         subscription_updated_at TEXT,
@@ -633,6 +635,7 @@ def _initialize_schema(conn, cur):
     )
     """)
     _safe_add_column("workspaces", "subscription_status", "TEXT")
+    _safe_add_column("workspaces", "trial_activated_at", "TEXT")
     _safe_add_column("workspaces", "trial_ends_at", "TEXT")
     _safe_add_column("workspaces", "current_period_end", "TEXT")
     _safe_add_column("workspaces", "subscription_updated_at", "TEXT")
@@ -650,6 +653,50 @@ def _initialize_schema(conn, cur):
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_subscription_events_workspace_time
     ON subscription_events(workspace_id, created_at)
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS trial_activations (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL UNIQUE,
+        contact_email TEXT NOT NULL,
+        admin_name TEXT NOT NULL,
+        token_fingerprint TEXT NOT NULL,
+        activated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+    )
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS trial_activation_attempts (
+        id TEXT PRIMARY KEY,
+        requester_hash TEXT NOT NULL,
+        success INTEGER NOT NULL,
+        attempted_at TEXT NOT NULL
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_trial_activation_attempts_requester_time
+    ON trial_activation_attempts(requester_hash, attempted_at)
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS trial_feedback (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        rating INTEGER NOT NULL,
+        outcome TEXT NOT NULL,
+        purchase_intent TEXT NOT NULL,
+        missing_feature TEXT,
+        notes TEXT,
+        contact_consent INTEGER NOT NULL DEFAULT 0,
+        submitted_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(workspace_id, idempotency_key)
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_trial_feedback_workspace_time
+    ON trial_feedback(workspace_id, created_at)
     """)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS workspace_api_keys (
@@ -755,6 +802,12 @@ def _initialize_schema(conn, cur):
         raise RuntimeError("SRE_TRIAL_DAYS must be an integer between 1 and 3650") from exc
     if not 1 <= trial_days <= 3650:
         raise RuntimeError("SRE_TRIAL_DAYS must be an integer between 1 and 3650")
+    trial_start_mode = (
+        os.getenv("SRE_TRIAL_START_MODE", "deployment").strip().lower()
+        or "deployment"
+    )
+    if trial_start_mode not in {"deployment", "activation"}:
+        raise RuntimeError("SRE_TRIAL_START_MODE must be deployment or activation")
 
     def _configured_datetime(name: str) -> tuple[bool, str | None]:
         raw = os.getenv(name, "").strip()
@@ -773,6 +826,7 @@ def _initialize_schema(conn, cur):
     raw_subscription_status = os.getenv("SRE_SUBSCRIPTION_STATUS", "").strip().lower()
     valid_subscription_statuses = {
         "trialing",
+        "pending_activation",
         "active",
         "past_due",
         "suspended",
@@ -781,7 +835,7 @@ def _initialize_schema(conn, cur):
     }
     if raw_subscription_status and raw_subscription_status not in valid_subscription_statuses:
         raise RuntimeError(
-            "SRE_SUBSCRIPTION_STATUS must be trialing, active, past_due, suspended, canceled, or expired"
+            "SRE_SUBSCRIPTION_STATUS must be pending_activation, trialing, active, past_due, suspended, canceled, or expired"
         )
 
     cur.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,))
@@ -789,14 +843,35 @@ def _initialize_schema(conn, cur):
     existing = dict(existing_row) if existing_row else None
     plan_changed = bool(existing and existing.get("plan") != workspace_plan)
     default_subscription_status = "trialing" if workspace_plan == "trial" else "active"
-    if raw_subscription_status:
+    activation_pending = bool(
+        workspace_plan == "trial"
+        and trial_start_mode == "activation"
+        and (
+            existing is None
+            or (
+                existing.get("subscription_status") == "pending_activation"
+                and not existing.get("trial_activated_at")
+            )
+        )
+    )
+    if activation_pending:
+        subscription_status = "pending_activation"
+    elif raw_subscription_status:
         subscription_status = raw_subscription_status
     elif existing and not plan_changed and existing.get("subscription_status"):
         subscription_status = existing["subscription_status"]
     else:
         subscription_status = default_subscription_status
 
-    if workspace_plan == "trial":
+    if activation_pending:
+        trial_activated_at = None
+        trial_ends_at = None
+    elif workspace_plan == "trial":
+        trial_activated_at = (
+            existing.get("trial_activated_at")
+            if existing and existing.get("trial_activated_at")
+            else ((existing or {}).get("created_at") or now)
+        )
         if explicit_trial_end:
             trial_ends_at = configured_trial_end
         elif existing and not plan_changed and existing.get("trial_ends_at"):
@@ -804,6 +879,7 @@ def _initialize_schema(conn, cur):
         else:
             trial_ends_at = (now_value + timedelta(days=trial_days)).isoformat()
     else:
+        trial_activated_at = None
         trial_ends_at = None
 
     if explicit_period_end:
@@ -816,6 +892,7 @@ def _initialize_schema(conn, cur):
     new_subscription_state = {
         "plan": workspace_plan,
         "subscription_status": subscription_status,
+        "trial_activated_at": trial_activated_at,
         "trial_ends_at": trial_ends_at,
         "current_period_end": current_period_end,
         "monthly_request_limit": max(0, request_limit),
@@ -836,13 +913,14 @@ def _initialize_schema(conn, cur):
         """
         INSERT INTO workspaces (
             id, name, plan, status, subscription_status, trial_ends_at,
-            current_period_end, subscription_updated_at,
+            trial_activated_at, current_period_end, subscription_updated_at,
             monthly_request_limit, created_at, updated_at
-        ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             plan = excluded.plan,
             subscription_status = excluded.subscription_status,
+            trial_activated_at = excluded.trial_activated_at,
             trial_ends_at = excluded.trial_ends_at,
             current_period_end = excluded.current_period_end,
             subscription_updated_at = excluded.subscription_updated_at,
@@ -855,6 +933,7 @@ def _initialize_schema(conn, cur):
             workspace_plan,
             subscription_status,
             trial_ends_at,
+            trial_activated_at,
             current_period_end,
             subscription_updated_at,
             max(0, request_limit),

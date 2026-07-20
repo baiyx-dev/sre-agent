@@ -43,6 +43,31 @@ const workspaceUsageTextEl = document.getElementById("workspaceUsageText");
 const workspaceUsageBarEl = document.getElementById("workspaceUsageBar");
 const workspaceUsageHintEl = document.getElementById("workspaceUsageHint");
 const workspaceEntitlementEl = document.getElementById("workspaceEntitlement");
+const trialGuideEl = document.getElementById("trialGuide");
+const trialGuideTitleEl = document.getElementById("trialGuideTitle");
+const trialProgressTextEl = document.getElementById("trialProgressText");
+const trialProgressBarEl = document.getElementById("trialProgressBar");
+const trialMilestonesEl = document.getElementById("trialMilestones");
+const trialNextActionBtnEl = document.getElementById("trialNextActionBtn");
+const trialUpgradeLinkEl = document.getElementById("trialUpgradeLink");
+const trialFeedbackPanelEl = document.getElementById("trialFeedbackPanel");
+const trialRatingInputEl = document.getElementById("trialRatingInput");
+const trialOutcomeInputEl = document.getElementById("trialOutcomeInput");
+const trialPurchaseIntentInputEl = document.getElementById("trialPurchaseIntentInput");
+const trialMissingFeatureInputEl = document.getElementById("trialMissingFeatureInput");
+const trialNotesInputEl = document.getElementById("trialNotesInput");
+const trialContactConsentInputEl = document.getElementById("trialContactConsentInput");
+const trialFeedbackBtnEl = document.getElementById("trialFeedbackBtn");
+const trialFeedbackStatusEl = document.getElementById("trialFeedbackStatus");
+const trialActivationModalEl = document.getElementById("trialActivationModal");
+const trialActivationCopyEl = document.getElementById("trialActivationCopy");
+const trialActivationTokenInputEl = document.getElementById("trialActivationTokenInput");
+const trialWorkspaceNameInputEl = document.getElementById("trialWorkspaceNameInput");
+const trialAdminNameInputEl = document.getElementById("trialAdminNameInput");
+const trialContactEmailInputEl = document.getElementById("trialContactEmailInput");
+const trialActivationStatusEl = document.getElementById("trialActivationStatus");
+const trialActivationBtnEl = document.getElementById("trialActivationBtn");
+const trialActivationCloseBtnEl = document.getElementById("trialActivationCloseBtn");
 
 const confirmModalEl = document.getElementById("confirmModal");
 const modalActionTypeEl = document.getElementById("modalActionType");
@@ -54,6 +79,8 @@ const modalCancelBtnEl = document.getElementById("modalCancelBtn");
 let currentPendingAction = null;
 let sreApiKey = "";
 let executionGuardToken = "";
+let latestTrialOnboarding = null;
+let newlyIssuedTrialApiKey = "";
 const chatSessionId = getOrCreateChatSessionId();
 
 try {
@@ -66,6 +93,196 @@ function apiFetch(resource, options = {}) {
   const headers = new Headers(options.headers || {});
   if (sreApiKey) headers.set("X-SRE-API-Key", sreApiKey);
   return window.fetch(resource, { ...options, headers });
+}
+
+async function fetchPublicTrialStatus() {
+  try {
+    const response = await window.fetch("/trial/status", {
+      headers: { Accept: "application/json" },
+    });
+    const data = await response.json();
+    if (!response.ok) return;
+    if (data.claim_available && trialActivationModalEl) {
+      if (trialActivationCopyEl) {
+        trialActivationCopyEl.textContent = `输入邀请令牌后开始 ${data.trial_days || 14} 天免费试用，并领取首把管理员 API Key。`;
+      }
+      trialActivationModalEl.classList.remove("hidden");
+    }
+  } catch (error) {
+  }
+}
+
+async function activateFreeTrial() {
+  if (!trialActivationBtnEl) return;
+  if (newlyIssuedTrialApiKey) {
+    try {
+      await window.navigator.clipboard.writeText(newlyIssuedTrialApiKey);
+      if (trialActivationStatusEl) trialActivationStatusEl.textContent = "API Key 已复制，可以关闭窗口开始试用。";
+    } catch (error) {
+      if (trialActivationStatusEl) trialActivationStatusEl.textContent = `请手动复制 API Key：${newlyIssuedTrialApiKey}`;
+    }
+    return;
+  }
+  const activationToken = trialActivationTokenInputEl ? trialActivationTokenInputEl.value.trim() : "";
+  const workspaceName = trialWorkspaceNameInputEl ? trialWorkspaceNameInputEl.value.trim() : "";
+  const adminName = trialAdminNameInputEl ? trialAdminNameInputEl.value.trim() : "";
+  const contactEmail = trialContactEmailInputEl ? trialContactEmailInputEl.value.trim() : "";
+  if (!activationToken || !workspaceName || !adminName || !contactEmail) {
+    if (trialActivationStatusEl) trialActivationStatusEl.textContent = "请完整填写邀请令牌、工作区、管理员和邮箱。";
+    return;
+  }
+  trialActivationBtnEl.disabled = true;
+  if (trialActivationStatusEl) trialActivationStatusEl.textContent = "正在创建试用工作区...";
+  try {
+    const response = await window.fetch("/trial/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        activation_token: activationToken,
+        workspace_name: workspaceName,
+        admin_name: adminName,
+        contact_email: contactEmail,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      if (trialActivationStatusEl) trialActivationStatusEl.textContent = data.detail || "试用激活失败";
+      return;
+    }
+    newlyIssuedTrialApiKey = data.api_key || "";
+    sreApiKey = newlyIssuedTrialApiKey;
+    if (apiKeyInputEl) apiKeyInputEl.value = sreApiKey;
+    try {
+      window.sessionStorage.setItem("sre-agent-api-key", sreApiKey);
+    } catch (error) {
+    }
+    if (trialActivationTokenInputEl) trialActivationTokenInputEl.value = "";
+    if (trialActivationStatusEl) {
+      trialActivationStatusEl.textContent = `激活成功。API Key（仅展示一次）：${newlyIssuedTrialApiKey}`;
+    }
+    trialActivationBtnEl.textContent = "复制 API Key";
+    await connectAndLoad();
+  } catch (error) {
+    if (trialActivationStatusEl) trialActivationStatusEl.textContent = "试用激活失败，请检查网络后重试。";
+  } finally {
+    trialActivationBtnEl.disabled = false;
+  }
+}
+
+function renderTrialOnboarding(data) {
+  latestTrialOnboarding = data;
+  if (!trialGuideEl) return;
+  const subscription = data.subscription || {};
+  if (subscription.plan !== "trial") {
+    trialGuideEl.classList.add("hidden");
+    return;
+  }
+  trialGuideEl.classList.remove("hidden");
+  const progress = Number(data.progress_percent || 0);
+  if (trialGuideTitleEl) {
+    trialGuideTitleEl.textContent = progress >= 100
+      ? "免费试用验证已完成"
+      : "完成首次价值验证";
+  }
+  if (trialProgressTextEl) trialProgressTextEl.textContent = `${progress}%`;
+  if (trialProgressBarEl) trialProgressBarEl.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  if (trialMilestonesEl) {
+    trialMilestonesEl.replaceChildren();
+    (data.milestones || []).forEach((milestone) => {
+      const item = document.createElement("div");
+      item.className = `trial-milestone${milestone.completed ? " complete" : ""}`;
+      item.textContent = `${milestone.completed ? "✓" : "○"} ${milestone.label}`;
+      trialMilestonesEl.appendChild(item);
+    });
+  }
+  const next = data.next_milestone || null;
+  if (trialNextActionBtnEl) {
+    trialNextActionBtnEl.dataset.milestoneId = next ? next.id : "complete";
+    trialNextActionBtnEl.textContent = next ? (next.next_action || "继续下一步") : "试用流程已完成";
+    trialNextActionBtnEl.disabled = !next;
+  }
+  const paidUpgrade = data.paid_upgrade || {};
+  if (trialUpgradeLinkEl && paidUpgrade.available && paidUpgrade.contact_url) {
+    trialUpgradeLinkEl.href = paidUpgrade.contact_url;
+    trialUpgradeLinkEl.classList.remove("hidden");
+  } else if (trialUpgradeLinkEl) {
+    trialUpgradeLinkEl.classList.add("hidden");
+  }
+}
+
+async function fetchTrialOnboarding() {
+  if (!sreApiKey) return;
+  try {
+    const response = await apiFetch("/trial/onboarding");
+    const data = await response.json();
+    if (response.ok) renderTrialOnboarding(data);
+  } catch (error) {
+  }
+}
+
+function continueTrialOnboarding() {
+  const milestoneId = trialNextActionBtnEl ? trialNextActionBtnEl.dataset.milestoneId : "";
+  if (milestoneId === "target_configured") {
+    openOnboardingModal();
+  } else if (milestoneId === "first_query") {
+    messageInputEl.value = "payment-service 状态";
+    messageInputEl.focus();
+  } else if (milestoneId === "first_diagnosis") {
+    messageInputEl.value = "payment-service 报警了，帮我排查";
+    messageInputEl.focus();
+  } else if (milestoneId === "feedback_submitted" && trialFeedbackPanelEl) {
+    trialFeedbackPanelEl.open = true;
+    trialFeedbackPanelEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+}
+
+function trialFeedbackIdempotencyKey() {
+  const storageKey = "sre-agent-trial-feedback-idempotency";
+  try {
+    const existing = window.localStorage.getItem(storageKey);
+    if (existing) return existing;
+    const created = generateSessionId();
+    window.localStorage.setItem(storageKey, created);
+    return created;
+  } catch (error) {
+    return generateSessionId();
+  }
+}
+
+async function submitTrialFeedback() {
+  if (!trialFeedbackBtnEl) return;
+  trialFeedbackBtnEl.disabled = true;
+  if (trialFeedbackStatusEl) trialFeedbackStatusEl.textContent = "提交中...";
+  try {
+    const response = await apiFetch("/trial/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        idempotency_key: trialFeedbackIdempotencyKey(),
+        rating: Number(trialRatingInputEl ? trialRatingInputEl.value : 5),
+        outcome: trialOutcomeInputEl ? trialOutcomeInputEl.value : "not_evaluated",
+        purchase_intent: trialPurchaseIntentInputEl ? trialPurchaseIntentInputEl.value : "maybe",
+        missing_feature: trialMissingFeatureInputEl ? trialMissingFeatureInputEl.value.trim() || null : null,
+        notes: trialNotesInputEl ? trialNotesInputEl.value.trim() || null : null,
+        contact_consent: Boolean(trialContactConsentInputEl && trialContactConsentInputEl.checked),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      if (trialFeedbackStatusEl) trialFeedbackStatusEl.textContent = data.detail || "反馈提交失败";
+      return;
+    }
+    try {
+      window.localStorage.removeItem("sre-agent-trial-feedback-idempotency");
+    } catch (error) {
+    }
+    if (trialFeedbackStatusEl) trialFeedbackStatusEl.textContent = "感谢反馈，已纳入试用转化分析。";
+    await fetchTrialOnboarding();
+  } catch (error) {
+    if (trialFeedbackStatusEl) trialFeedbackStatusEl.textContent = "反馈提交失败，请稍后重试。";
+  } finally {
+    trialFeedbackBtnEl.disabled = false;
+  }
 }
 
 async function verifyAccess() {
@@ -831,7 +1048,14 @@ async function fetchTargets() {
     if (targets.length === 0) {
       targetsListEl.textContent = "暂无已接入目标";
       try {
-        if (!window.localStorage.getItem("sre-agent-onboarding-seen")) {
+        const activationModalOpen = Boolean(
+          trialActivationModalEl
+          && !trialActivationModalEl.classList.contains("hidden")
+        );
+        if (
+          !activationModalOpen
+          && !window.localStorage.getItem("sre-agent-onboarding-seen")
+        ) {
           openOnboardingModal();
         }
       } catch (error) {
@@ -890,6 +1114,7 @@ async function addTarget() {
     setConfigStatus(`已添加监测目标：${name}`);
     await fetchTargets();
     await fetchKnownServices();
+    await fetchTrialOnboarding();
     closeOnboardingModal();
   } catch (error) {
     setConfigStatus("添加失败");
@@ -1017,6 +1242,7 @@ async function sendMessage() {
     renderSteps(data.steps || [], data.assessment_details || null);
     appendAnalysisNote(data);
     await fetchTimeline();
+    await fetchTrialOnboarding();
 
     if (data.requires_confirmation && data.pending_action) {
       openConfirmationModal(data.pending_action);
@@ -1104,6 +1330,24 @@ if (targetsListEl) {
   });
 }
 
+if (trialNextActionBtnEl) {
+  trialNextActionBtnEl.addEventListener("click", continueTrialOnboarding);
+}
+
+if (trialFeedbackBtnEl) {
+  trialFeedbackBtnEl.addEventListener("click", submitTrialFeedback);
+}
+
+if (trialActivationBtnEl) {
+  trialActivationBtnEl.addEventListener("click", activateFreeTrial);
+}
+
+if (trialActivationCloseBtnEl) {
+  trialActivationCloseBtnEl.addEventListener("click", () => {
+    if (trialActivationModalEl) trialActivationModalEl.classList.add("hidden");
+  });
+}
+
 async function connectAndLoad() {
   sreApiKey = apiKeyInputEl ? apiKeyInputEl.value.trim() : "";
   executionGuardToken = guardTokenInputEl ? guardTokenInputEl.value.trim() : "";
@@ -1123,6 +1367,7 @@ async function connectAndLoad() {
     fetchKnownServices(),
     fetchTimeline(),
     fetchWorkspaceUsage(),
+    fetchTrialOnboarding(),
   ]);
 }
 
@@ -1135,4 +1380,5 @@ if (apiKeyInputEl) {
   });
 }
 
+fetchPublicTrialStatus();
 connectAndLoad();

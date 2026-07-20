@@ -67,6 +67,66 @@
 
     <main class="main">
       <div class="chat-panel">
+        <section id="trialGuide" class="trial-guide hidden" aria-live="polite">
+          <div class="trial-guide-heading">
+            <div>
+              <div class="trial-eyebrow">免费试用引导</div>
+              <h2 id="trialGuideTitle">完成首次价值验证</h2>
+            </div>
+            <span id="trialProgressText" class="trial-progress-text">0%</span>
+          </div>
+          <div class="trial-progress-track" aria-hidden="true">
+            <div id="trialProgressBar" class="trial-progress-bar"></div>
+          </div>
+          <div id="trialMilestones" class="trial-milestones"></div>
+          <div class="trial-guide-actions">
+            <button id="trialNextActionBtn" class="setup-btn">继续下一步</button>
+            <a id="trialUpgradeLink" class="trial-upgrade-link hidden" rel="noopener noreferrer">咨询付费升级</a>
+          </div>
+          <details id="trialFeedbackPanel" class="trial-feedback-panel">
+            <summary>提交试用反馈</summary>
+            <div class="trial-feedback-grid">
+              <label>整体评分
+                <select id="trialRatingInput">
+                  <option value="5">5 - 很有价值</option>
+                  <option value="4">4 - 有价值</option>
+                  <option value="3">3 - 一般</option>
+                  <option value="2">2 - 较弱</option>
+                  <option value="1">1 - 无价值</option>
+                </select>
+              </label>
+              <label>试用结果
+                <select id="trialOutcomeInput">
+                  <option value="high_value">产生明确价值</option>
+                  <option value="some_value">产生部分价值</option>
+                  <option value="not_useful">暂未产生价值</option>
+                  <option value="not_evaluated">尚未评估</option>
+                </select>
+              </label>
+              <label>付费意向
+                <select id="trialPurchaseIntentInput">
+                  <option value="maybe">需要进一步评估</option>
+                  <option value="yes">愿意继续沟通</option>
+                  <option value="no">暂不考虑</option>
+                </select>
+              </label>
+              <label class="trial-feedback-wide">最缺少的能力
+                <input id="trialMissingFeatureInput" maxlength="1000" placeholder="例如：企业微信告警、更多 Kubernetes 上下文" />
+              </label>
+              <label class="trial-feedback-wide">补充说明
+                <textarea id="trialNotesInput" maxlength="2000" rows="3" placeholder="哪些场景有效，哪些地方仍需改进"></textarea>
+              </label>
+              <label class="trial-consent trial-feedback-wide">
+                <input id="trialContactConsentInput" type="checkbox" />
+                同意根据本次反馈联系我讨论产品改进或升级
+              </label>
+            </div>
+            <div class="trial-feedback-actions">
+              <button id="trialFeedbackBtn" class="setup-btn">提交反馈</button>
+              <span id="trialFeedbackStatus" class="modal-status"></span>
+            </div>
+          </details>
+        </section>
         <div id="messages" class="messages"></div>
 
         <div class="input-box">
@@ -123,6 +183,26 @@
       <div id="targetsList" class="known-services modal-known-services">暂无已接入目标</div>
       <div class="modal-actions">
         <button id="onboardingCloseBtn" class="btn-cancel">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="trialActivationModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="trialActivationTitle">
+    <div class="modal-card onboarding-card">
+      <div class="trial-eyebrow">免费试用</div>
+      <h3 id="trialActivationTitle">领取试用工作区</h3>
+      <p id="trialActivationCopy" class="onboarding-copy">输入邀请令牌后开始计时，并领取首把管理员 API Key。</p>
+      <div class="activation-form">
+        <input id="trialActivationTokenInput" type="password" autocomplete="one-time-code" placeholder="试用邀请令牌" />
+        <input id="trialWorkspaceNameInput" maxlength="100" placeholder="团队或工作区名称" />
+        <input id="trialAdminNameInput" maxlength="100" placeholder="管理员姓名" />
+        <input id="trialContactEmailInput" type="email" maxlength="254" placeholder="联系邮箱" />
+      </div>
+      <p class="activation-privacy">邮箱仅用于本次试用支持与经同意的后续沟通；API Key 只展示一次。</p>
+      <p id="trialActivationStatus" class="modal-status"></p>
+      <div class="modal-actions">
+        <button id="trialActivationBtn" class="btn-confirm">开始免费试用</button>
+        <button id="trialActivationCloseBtn" class="btn-cancel">稍后</button>
       </div>
     </div>
   </div>

@@ -12,6 +12,7 @@ from backend.storage.db import configured_workspace_id, get_conn, is_postgres_da
 VALID_ROLES = {"viewer", "operator", "admin"}
 VALID_PLANS = {"trial", "starter", "team", "enterprise"}
 VALID_SUBSCRIPTION_STATUSES = {
+    "pending_activation",
     "trialing",
     "active",
     "past_due",
@@ -126,7 +127,11 @@ def get_subscription_status(
         blocking_reason = "subscription status is invalid"
     elif plan == "trial":
         access_end = trial_end
-        if configured_status in {"suspended", "canceled", "expired"}:
+        if configured_status == "pending_activation":
+            effective_status = "pending_activation"
+            access_end = None
+            blocking_reason = "trial has not been activated"
+        elif configured_status in {"suspended", "canceled", "expired"}:
             blocking_reason = f"trial is {configured_status}"
         elif configured_status not in {"trialing", "active"}:
             effective_status = "configuration_error"
@@ -165,6 +170,7 @@ def get_subscription_status(
         "access_allowed": access_allowed,
         "upgrade_required": not access_allowed,
         "blocking_reason": blocking_reason,
+        "trial_activated_at": workspace.get("trial_activated_at"),
         "trial_ends_at": workspace.get("trial_ends_at"),
         "current_period_end": workspace.get("current_period_end"),
         "access_ends_at": access_end.isoformat() if access_end else None,

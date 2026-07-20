@@ -295,6 +295,10 @@ SRE_PLAN=trial
 SRE_MONTHLY_REQUEST_LIMIT=1000
 SRE_SUBSCRIPTION_STATUS=trialing
 SRE_TRIAL_DAYS=14
+SRE_TRIAL_START_MODE=deployment
+SRE_TRIAL_SELF_SERVICE_ENABLED=false
+SRE_TRIAL_ACTIVATION_TOKEN=
+SRE_UPGRADE_CONTACT_URL=
 SRE_TRIAL_ENDS_AT=
 SRE_CURRENT_PERIOD_END=
 
@@ -346,10 +350,11 @@ SRE_CHANGE_JOB_MAX_ATTEMPTS=1
 - API 认证默认开启；至少配置一个高强度 API Key，管理员 Key 同时拥有 viewer/operator 权限
 - 当前商业交付采用每客户独立部署、每实例一个工作区；工作区 API Key 只保存 SHA-256 摘要，可撤销并按月计量
 - 开发环境默认写入演示服务；生产环境默认 `SRE_SEED_DEMO_DATA=false`，不会把演示数据当成客户数据
-- 生产环境默认 `SRE_REQUIRE_REAL_DATA_SOURCE=true`；至少配置统一 SRE API、Prometheus、Loki、Kubernetes API 或一个受监控目标且地址通过 SSRF 校验，readiness 才会通过
+- 生产环境默认 `SRE_REQUIRE_REAL_DATA_SOURCE=true`；至少配置统一 SRE API、Prometheus、Loki、Kubernetes API 或一个受监控目标且地址通过 SSRF 校验，readiness 才会通过。唯一例外是启用自助领取的 trial onboarding 宽限；升级为付费套餐后恢复严格门禁
 - `SRE_REQUIRE_REAL_DATA_SOURCE=false` 只用于隔离评估，不能作为付费试点或生产验收依据
 - `SRE_MONTHLY_REQUEST_LIMIT=0` 表示不限请求；trial/starter/team 的建议默认值分别为 1,000/10,000/100,000
-- trial 首次初始化时会固化到期时间，重启不会延期；到期、暂停或超过付款宽限期后，业务 API 返回 402，但身份、工作区、监控、账单和价值报告仍可访问。升级与续费流程见 [SUBSCRIPTION_LIFECYCLE.md](docs/SUBSCRIPTION_LIFECYCLE.md)
+- trial 默认在首次初始化时固化到期时间；邀请制试用可设置 `SRE_TRIAL_START_MODE=activation`，领取后才开始计时并签发首把 admin 工作区 Key。两种模式重启都不会延期，详见 [FREE_TRIAL.md](docs/FREE_TRIAL.md)
+- 到期、暂停或超过付款宽限期后，业务 API 返回 402，但身份、工作区、监控、账单、价值报告和试用反馈仍可访问。升级与续费流程见 [SUBSCRIPTION_LIFECYCLE.md](docs/SUBSCRIPTION_LIFECYCLE.md)
 - 套餐权限由服务端强制执行：trial/starter 只允许诊断和 dry-run，team/enterprise 才能在其余生产安全门禁全部通过后执行真实变更；工作区密钥上限依次为 3/10/50/不限
 - 生产环境的 Bootstrap Key 在创建工作区密钥后只允许账户恢复与商业控制面调用，日常业务必须使用可计量的工作区 Key，避免绕过额度
 - 前端只把 API Key 保存在当前浏览器标签页的 `sessionStorage`，关闭标签页后自动清除
@@ -562,6 +567,12 @@ payment-service 状态
 - `DELETE /settings/targets/{name}`
 
 ### Workspace / Billing
+
+- `GET /trial/status`：公开查询该独立实例是否可领取，不返回工作区或联系人信息
+- `POST /trial/activate`：使用邀请令牌一次性启动试用并领取首把 admin 工作区 Key
+- `GET /trial/onboarding`：查看接入、首次查询、首次诊断和反馈里程碑
+- `POST /trial/feedback`：幂等提交评分、价值结果、付费意向和缺失能力
+- `GET /trial/conversion-metrics`：管理员查看首次价值时间和试用转化证据
 
 - `GET /workspace`：查看当前隔离工作区、套餐与请求额度
 - `GET /workspace/api-keys`：管理员查看密钥元数据，不返回密钥或摘要

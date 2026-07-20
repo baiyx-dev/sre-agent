@@ -23,6 +23,8 @@ _RETENTION_DEFAULTS = {
     "incidents": ("SRE_RETENTION_INCIDENT_DAYS", 730),
     "change_requests": ("SRE_RETENTION_CHANGE_DAYS", 730),
     "workspace_api_keys": ("SRE_RETENTION_REVOKED_KEY_DAYS", 730),
+    "trial_activation_attempts": ("SRE_RETENTION_TRIAL_ATTEMPT_DAYS", 30),
+    "trial_feedback": ("SRE_RETENTION_TRIAL_FEEDBACK_DAYS", 730),
     "execution_audits": ("SRE_RETENTION_AUDIT_DAYS", 2555),
 }
 
@@ -249,6 +251,14 @@ def retention_preview(now: datetime | None = None) -> dict:
             """,
             (cutoffs["workspace_api_keys"]["iso"],),
         ),
+        "trial_activation_attempts": count(
+            "SELECT COUNT(*) AS count FROM trial_activation_attempts WHERE attempted_at < ?",
+            (cutoffs["trial_activation_attempts"]["iso"],),
+        ),
+        "trial_feedback": count(
+            "SELECT COUNT(*) AS count FROM trial_feedback WHERE created_at < ?",
+            (cutoffs["trial_feedback"]["iso"],),
+        ),
         "execution_audit_projections": count(
             "SELECT COUNT(*) AS count FROM execution_audits WHERE created_at < ?",
             (cutoffs["execution_audits"]["iso"],),
@@ -368,6 +378,16 @@ def purge_retained_data(
             "workspace_api_keys",
             "DELETE FROM workspace_api_keys WHERE revoked_at IS NOT NULL AND revoked_at < ?",
             (cutoffs["workspace_api_keys"]["iso"],),
+        )
+        execute(
+            "trial_activation_attempts",
+            "DELETE FROM trial_activation_attempts WHERE attempted_at < ?",
+            (cutoffs["trial_activation_attempts"]["iso"],),
+        )
+        execute(
+            "trial_feedback",
+            "DELETE FROM trial_feedback WHERE created_at < ?",
+            (cutoffs["trial_feedback"]["iso"],),
         )
         audit_prefix = _audit_prunable_prefix(cur, cutoffs["execution_audits"]["iso"])
         if audit_prefix["count"]:

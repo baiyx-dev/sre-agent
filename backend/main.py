@@ -20,6 +20,7 @@ from backend.api.routes_changes import router as changes_router
 from backend.api.routes_audit import router as audit_router
 from backend.api.routes_health import router as health_router
 from backend.api.routes_commercial import router as commercial_router
+from backend.api.routes_trial import router as trial_router
 from backend.security_auth import require_viewer
 from backend.services.observability_service import (
     record_request,
@@ -208,6 +209,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
     return JSONResponse(
         status_code=exc.status_code,
+        headers=exc.headers,
         content={
             "error": "request_failed",
             "detail": exc.detail,
@@ -262,3 +264,4 @@ app.include_router(changes_router)
 app.include_router(audit_router)
 app.include_router(health_router)
 app.include_router(commercial_router)
+app.include_router(trial_router)

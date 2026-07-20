@@ -130,6 +130,10 @@ class RegressionTests(unittest.TestCase):
         os.environ.pop("SRE_INFRA_COST_USD_MONTHLY", None)
         os.environ.pop("SRE_CUSTOMER_HOURLY_COST_USD", None)
         os.environ.pop("SRE_SUPPORT_HOURLY_COST_USD", None)
+        os.environ.pop("SRE_TRIAL_SELF_SERVICE_ENABLED", None)
+        os.environ.pop("SRE_TRIAL_ACTIVATION_TOKEN", None)
+        os.environ.pop("SRE_TRIAL_START_MODE", None)
+        os.environ.pop("SRE_UPGRADE_CONTACT_URL", None)
         os.environ["SRE_OUTBOUND_HOST_ALLOWLIST"] = "prom.example.com,loki.example.com,k8s.example.com,executor.example.com"
         os.environ.pop("SRE_ALLOW_PRIVATE_NETWORK_TARGETS", None)
         self.external_source_patchers = [
@@ -1225,7 +1229,7 @@ class RegressionTests(unittest.TestCase):
                     """
                     UPDATE workspaces
                     SET name = ?, plan = ?, status = ?, subscription_status = ?,
-                        trial_ends_at = ?, current_period_end = ?,
+                        trial_activated_at = ?, trial_ends_at = ?, current_period_end = ?,
                         subscription_updated_at = ?, monthly_request_limit = ?,
                         updated_at = ?
                     WHERE id = ?
@@ -1235,6 +1239,7 @@ class RegressionTests(unittest.TestCase):
                         original_workspace["plan"],
                         original_workspace["status"],
                         original_workspace.get("subscription_status"),
+                        original_workspace.get("trial_activated_at"),
                         original_workspace.get("trial_ends_at"),
                         original_workspace.get("current_period_end"),
                         original_workspace.get("subscription_updated_at"),
@@ -1383,7 +1388,7 @@ class RegressionTests(unittest.TestCase):
                     """
                     UPDATE workspaces
                     SET name = ?, plan = ?, status = ?, subscription_status = ?,
-                        trial_ends_at = ?, current_period_end = ?,
+                        trial_activated_at = ?, trial_ends_at = ?, current_period_end = ?,
                         subscription_updated_at = ?, monthly_request_limit = ?,
                         updated_at = ?
                     WHERE id = ?
@@ -1393,6 +1398,7 @@ class RegressionTests(unittest.TestCase):
                         original_workspace["plan"],
                         original_workspace["status"],
                         original_workspace.get("subscription_status"),
+                        original_workspace.get("trial_activated_at"),
                         original_workspace.get("trial_ends_at"),
                         original_workspace.get("current_period_end"),
                         original_workspace.get("subscription_updated_at"),
@@ -1403,6 +1409,293 @@ class RegressionTests(unittest.TestCase):
                 )
                 conn.commit()
                 conn.close()
+
+    def test_self_service_trial_starts_on_activation_and_tracks_conversion(self):
+        tracked_env = {
+            name: os.environ.get(name)
+            for name in (
+                "DATABASE_URL",
+                "SRE_AGENT_DB_PATH",
+                "SRE_PLAN",
+                "SRE_SUBSCRIPTION_STATUS",
+                "SRE_TRIAL_DAYS",
+                "SRE_TRIAL_ENDS_AT",
+                "SRE_TRIAL_START_MODE",
+                "SRE_TRIAL_SELF_SERVICE_ENABLED",
+                "SRE_TRIAL_ACTIVATION_TOKEN",
+                "SRE_UPGRADE_CONTACT_URL",
+                "SRE_AUTH_ENABLED",
+                "SRE_ADMIN_API_KEY",
+                "SRE_VIEWER_API_KEY",
+                "SRE_OPERATOR_API_KEY",
+                "SRE_SEED_DEMO_DATA",
+                "SRE_REQUIRE_REAL_DATA_SOURCE",
+                "SRE_OUTBOUND_HOST_ALLOWLIST",
+            )
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                os.environ.pop("DATABASE_URL", None)
+                os.environ["SRE_AGENT_DB_PATH"] = str(Path(temp_dir) / "trial.db")
+                os.environ["SRE_PLAN"] = "trial"
+                os.environ["SRE_SUBSCRIPTION_STATUS"] = "trialing"
+                os.environ["SRE_TRIAL_DAYS"] = "14"
+                os.environ.pop("SRE_TRIAL_ENDS_AT", None)
+                os.environ["SRE_TRIAL_START_MODE"] = "activation"
+                os.environ["SRE_TRIAL_SELF_SERVICE_ENABLED"] = "true"
+                os.environ["SRE_TRIAL_ACTIVATION_TOKEN"] = "trial-activation-token-with-40-random-chars"
+                os.environ["SRE_UPGRADE_CONTACT_URL"] = "https://example.com/upgrade"
+                os.environ["SRE_AUTH_ENABLED"] = "true"
+                os.environ.pop("SRE_ADMIN_API_KEY", None)
+                os.environ.pop("SRE_VIEWER_API_KEY", None)
+                os.environ.pop("SRE_OPERATOR_API_KEY", None)
+                os.environ["SRE_SEED_DEMO_DATA"] = "false"
+                os.environ["SRE_REQUIRE_REAL_DATA_SOURCE"] = "true"
+                os.environ["SRE_OUTBOUND_HOST_ALLOWLIST"] = "example.com"
+                init_db()
+
+                pending = get_subscription_status()
+                self.assertEqual(pending["effective_status"], "pending_activation")
+                self.assertFalse(pending["access_allowed"])
+                self.assertIsNone(pending["trial_ends_at"])
+
+                with TestClient(app) as client:
+                    public = client.get("/trial/status")
+                    self.assertEqual(public.status_code, 200)
+                    self.assertTrue(public.json()["claim_available"])
+                    self.assertEqual(public.json()["trial_days"], 14)
+
+                    ready = client.get("/health/ready")
+                    self.assertEqual(ready.status_code, 200)
+                    self.assertTrue(ready.json()["checks"]["trial_activation"])
+                    self.assertTrue(ready.json()["checks"]["real_data_source"])
+                    self.assertTrue(
+                        ready.json()["details"]["trial_data_source_onboarding_grace"]
+                    )
+                    self.assertTrue(ready.json()["details"]["trial_claim_available"])
+
+                    invalid = client.post(
+                        "/trial/activate",
+                        json={
+                            "activation_token": "wrong-token",
+                            "workspace_name": "Trial workspace",
+                            "admin_name": "Trial Admin",
+                            "contact_email": "trial@example.com",
+                        },
+                    )
+                    self.assertEqual(invalid.status_code, 401)
+                    for _ in range(4):
+                        self.assertEqual(
+                            client.post(
+                                "/trial/activate",
+                                json={
+                                    "activation_token": "wrong-token",
+                                    "workspace_name": "Trial workspace",
+                                    "admin_name": "Trial Admin",
+                                    "contact_email": "trial@example.com",
+                                },
+                            ).status_code,
+                            401,
+                        )
+                    limited = client.post(
+                        "/trial/activate",
+                        json={
+                            "activation_token": os.environ["SRE_TRIAL_ACTIVATION_TOKEN"],
+                            "workspace_name": "Trial workspace",
+                            "admin_name": "Trial Admin",
+                            "contact_email": "trial@example.com",
+                        },
+                    )
+                    self.assertEqual(limited.status_code, 429)
+                    self.assertEqual(limited.headers.get("retry-after"), "900")
+                    conn = get_conn()
+                    conn.cursor().execute("DELETE FROM trial_activation_attempts")
+                    conn.commit()
+                    conn.close()
+
+                    activated = client.post(
+                        "/trial/activate",
+                        json={
+                            "activation_token": os.environ["SRE_TRIAL_ACTIVATION_TOKEN"],
+                            "workspace_name": "Trial workspace",
+                            "admin_name": "Trial Admin",
+                            "contact_email": "Trial@Example.com",
+                        },
+                    )
+                    self.assertEqual(activated.status_code, 201)
+                    activated_body = activated.json()
+                    self.assertTrue(activated_body["api_key"].startswith("sre_live_"))
+                    self.assertEqual(activated_body["contact_email"], "trial@example.com")
+                    self.assertEqual(
+                        activated_body["subscription"]["effective_status"],
+                        "trialing",
+                    )
+                    self.assertTrue(activated_body["subscription"]["access_allowed"])
+                    issued_key = activated_body["api_key"]
+                    admin_headers = {"Authorization": f"Bearer {issued_key}"}
+
+                    replay = client.post(
+                        "/trial/activate",
+                        json={
+                            "activation_token": os.environ["SRE_TRIAL_ACTIVATION_TOKEN"],
+                            "workspace_name": "Trial workspace",
+                            "admin_name": "Trial Admin",
+                            "contact_email": "trial@example.com",
+                        },
+                    )
+                    self.assertEqual(replay.status_code, 409)
+
+                    identity = client.get("/auth/me", headers=admin_headers)
+                    self.assertEqual(identity.status_code, 200)
+                    self.assertEqual(identity.json()["role"], "admin")
+
+                    onboarding = client.get("/trial/onboarding", headers=admin_headers)
+                    self.assertEqual(onboarding.status_code, 200)
+                    self.assertEqual(onboarding.json()["progress_percent"], 20)
+                    self.assertEqual(
+                        onboarding.json()["next_milestone"]["id"],
+                        "target_configured",
+                    )
+                    self.assertTrue(onboarding.json()["paid_upgrade"]["available"])
+                    self.assertFalse(
+                        onboarding.json()["paid_upgrade"]["payment_automation"]
+                    )
+
+                    target = client.post(
+                        "/settings/targets",
+                        headers=admin_headers,
+                        json={"name": "trial-api", "base_url": "https://example.com/health"},
+                    )
+                    self.assertEqual(target.status_code, 200)
+
+                    conn = get_conn()
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        INSERT INTO task_runs (
+                            user_message, intent, final_answer, generation_source,
+                            llm_provider, used_fallback, fallback_reason, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "trial-api 状态",
+                            "status_query",
+                            "healthy",
+                            "fallback_rule",
+                            None,
+                            1,
+                            "rule_only",
+                            datetime.now(timezone.utc).isoformat(),
+                        ),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO task_runs (
+                            user_message, intent, final_answer, generation_source,
+                            llm_provider, used_fallback, fallback_reason, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "trial-api 报警了",
+                            "troubleshoot",
+                            "diagnosed",
+                            "fallback_rule",
+                            None,
+                            1,
+                            "rule_only",
+                            (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat(),
+                        ),
+                    )
+                    conn.commit()
+                    conn.close()
+
+                    before_feedback = client.get(
+                        "/trial/onboarding",
+                        headers=admin_headers,
+                    )
+                    self.assertEqual(before_feedback.json()["progress_percent"], 80)
+                    self.assertIsNotNone(before_feedback.json()["first_value_at"])
+                    self.assertIsNotNone(
+                        before_feedback.json()["time_to_first_value_minutes"]
+                    )
+
+                    feedback_payload = {
+                        "idempotency_key": "trial-feedback-regression-v1",
+                        "rating": 5,
+                        "outcome": "high_value",
+                        "purchase_intent": "yes",
+                        "missing_feature": "Slack notifications",
+                        "notes": "Useful in the first incident drill.",
+                        "contact_consent": True,
+                    }
+                    feedback = client.post(
+                        "/trial/feedback",
+                        headers=admin_headers,
+                        json=feedback_payload,
+                    )
+                    self.assertEqual(feedback.status_code, 201)
+                    self.assertTrue(feedback.json()["created"])
+                    feedback_replay = client.post(
+                        "/trial/feedback",
+                        headers=admin_headers,
+                        json=feedback_payload,
+                    )
+                    self.assertEqual(feedback_replay.status_code, 201)
+                    self.assertFalse(feedback_replay.json()["created"])
+                    changed_feedback = dict(feedback_payload)
+                    changed_feedback["rating"] = 1
+                    self.assertEqual(
+                        client.post(
+                            "/trial/feedback",
+                            headers=admin_headers,
+                            json=changed_feedback,
+                        ).status_code,
+                        409,
+                    )
+
+                    completed = client.get("/trial/onboarding", headers=admin_headers)
+                    self.assertEqual(completed.json()["progress_percent"], 100)
+                    metrics = client.get(
+                        "/trial/conversion-metrics",
+                        headers=admin_headers,
+                    )
+                    self.assertEqual(metrics.status_code, 200)
+                    self.assertEqual(metrics.json()["feedback_summary"]["count"], 1)
+                    self.assertEqual(
+                        metrics.json()["feedback_summary"]["purchase_intent_yes"],
+                        1,
+                    )
+
+                    first_end = get_subscription_status()["trial_ends_at"]
+                    init_db()
+                    self.assertEqual(get_subscription_status()["trial_ends_at"], first_end)
+                    self.assertIsNotNone(get_subscription_status()["trial_activated_at"])
+
+                    conn = get_conn()
+                    cur = conn.cursor()
+                    cur.execute(
+                        "UPDATE workspaces SET trial_ends_at = ?, subscription_status = 'trialing' WHERE id = ?",
+                        ("2000-01-01T00:00:00+00:00", "default"),
+                    )
+                    conn.commit()
+                    conn.close()
+                    expired_feedback = dict(feedback_payload)
+                    expired_feedback["idempotency_key"] = "trial-feedback-after-expiry"
+                    self.assertEqual(
+                        client.post(
+                            "/trial/feedback",
+                            headers=admin_headers,
+                            json=expired_feedback,
+                        ).status_code,
+                        201,
+                    )
+            finally:
+                for name, value in tracked_env.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
+                init_db()
 
     def test_production_readiness_fails_closed(self):
         os.environ["SRE_ENVIRONMENT"] = "production"

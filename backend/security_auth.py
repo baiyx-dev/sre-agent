@@ -30,7 +30,7 @@ def _subscription_recovery_path(request: Request) -> bool:
         "/metrics",
         "/internal/metrics",
         "/internal/prometheus",
-    } or path.startswith("/billing/"):
+    } or path.startswith("/billing/") or path.startswith("/trial/"):
         return True
     if path == "/workspace/api-keys" and request.method == "GET":
         return True
