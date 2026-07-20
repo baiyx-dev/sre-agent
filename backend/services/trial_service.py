@@ -504,7 +504,21 @@ def trial_onboarding_status(workspace_id: str) -> dict:
     conn = get_conn()
     cur = conn.cursor()
     try:
-        cur.execute("SELECT MIN(created_at) AS at, COUNT(*) AS count FROM monitored_targets")
+        cur.execute(
+            """
+            SELECT
+                MIN(CASE
+                    WHEN last_connected_at IS NOT NULL
+                    THEN last_connected_at
+                END) AS at,
+                SUM(CASE
+                    WHEN last_connected_at IS NOT NULL
+                    THEN 1 ELSE 0
+                END) AS count,
+                COUNT(*) AS configured_count
+            FROM monitored_targets
+            """
+        )
         target = cur.fetchone()
         first_query = _first_evidence_backed_task(cur)
         first_diagnosis = _first_evidence_backed_task(cur, intent="troubleshoot")
@@ -531,10 +545,16 @@ def trial_onboarding_status(workspace_id: str) -> dict:
         },
         {
             "id": "target_configured",
-            "label": "接入一个服务目标",
-            "completed": int(target["count"]) > 0,
+            "label": "验证一个真实服务目标",
+            "completed": int(target["count"] or 0) > 0,
             "completed_at": target["at"],
-            "next_action": "在接入服务中添加健康检查地址" if int(target["count"]) == 0 else None,
+            "next_action": (
+                "在接入服务中添加健康检查地址"
+                if int(target["configured_count"] or 0) == 0
+                else "重试服务目标连接验证"
+            )
+            if int(target["count"] or 0) == 0
+            else None,
         },
         {
             "id": "first_query",
@@ -586,6 +606,8 @@ def trial_onboarding_status(workspace_id: str) -> dict:
         "time_to_first_value_minutes": time_to_first_value_minutes,
         "value_evidence_count": int(value_evidence["count"]),
         "feedback_count": int(feedback["count"]),
+        "configured_target_count": int(target["configured_count"] or 0),
+        "verified_target_count": int(target["count"] or 0),
         "paid_upgrade": {
             "available": bool(_upgrade_contact_url()),
             "contact_url": _upgrade_contact_url(),

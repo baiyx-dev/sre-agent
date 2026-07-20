@@ -905,7 +905,9 @@ def list_monitored_targets() -> list[dict]:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT id, name, base_url, created_at
+        SELECT id, name, base_url, created_at, verification_status,
+               last_verified_at, last_connected_at, last_probe_error,
+               last_latency_ms
         FROM monitored_targets
         ORDER BY id DESC
         """
@@ -920,7 +922,9 @@ def get_monitored_target(name: str) -> dict | None:
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT id, name, base_url, created_at
+        SELECT id, name, base_url, created_at, verification_status,
+               last_verified_at, last_connected_at, last_probe_error,
+               last_latency_ms
         FROM monitored_targets
         WHERE name = ?
         """,
@@ -940,18 +944,80 @@ def upsert_monitored_target(name: str, base_url: str) -> dict:
         INSERT INTO monitored_targets(name, base_url, created_at)
         VALUES (?, ?, ?)
         ON CONFLICT(name) DO UPDATE SET
-            base_url=excluded.base_url
+            base_url=excluded.base_url,
+            verification_status='pending',
+            last_verified_at=NULL,
+            last_connected_at=NULL,
+            last_probe_error=NULL,
+            last_latency_ms=NULL
         """,
         (name, base_url, now),
     )
     conn.commit()
     cur.execute(
-        "SELECT id, name, base_url, created_at FROM monitored_targets WHERE name = ?",
+        """
+        SELECT id, name, base_url, created_at, verification_status,
+               last_verified_at, last_connected_at, last_probe_error,
+               last_latency_ms
+        FROM monitored_targets WHERE name = ?
+        """,
         (name,),
     )
     row = cur.fetchone()
     conn.close()
     return dict(row)
+
+
+def record_monitored_target_verification(
+    name: str,
+    *,
+    status: str,
+    probe_error: str | None,
+    latency_ms: float | None,
+) -> dict | None:
+    if status not in {"running", "degraded", "down"}:
+        raise ValueError("unsupported monitored target verification status")
+    conn = get_conn()
+    cur = conn.cursor()
+    verified_at = _utc_now().isoformat()
+    cur.execute(
+        """
+        UPDATE monitored_targets
+        SET verification_status = ?, last_verified_at = ?,
+            last_connected_at = CASE
+                WHEN ? IN ('running', 'degraded') THEN ?
+                ELSE last_connected_at
+            END,
+            last_probe_error = ?, last_latency_ms = ?
+        WHERE name = ?
+        """,
+        (
+            status,
+            verified_at,
+            status,
+            verified_at,
+            probe_error,
+            latency_ms,
+            name,
+        ),
+    )
+    updated = cur.rowcount > 0
+    conn.commit()
+    if not updated:
+        conn.close()
+        return None
+    cur.execute(
+        """
+        SELECT id, name, base_url, created_at, verification_status,
+               last_verified_at, last_connected_at, last_probe_error,
+               last_latency_ms
+        FROM monitored_targets WHERE name = ?
+        """,
+        (name,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def delete_monitored_target(name: str) -> bool:

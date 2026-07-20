@@ -19,6 +19,7 @@ from backend.storage.repositories import (
     set_app_setting,
     upsert_monitored_target,
 )
+from backend.tools.target_probe import verify_monitored_target
 
 router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(require_admin)])
 
@@ -349,8 +350,35 @@ def create_or_update_target(req: MonitoredTargetRequest):
         raise HTTPException(status_code=400, detail="target name is required")
     if not (base_url.startswith("http://") or base_url.startswith("https://")):
         raise HTTPException(status_code=400, detail="target base_url must start with http:// or https://")
-    saved = upsert_monitored_target(name=name, base_url=base_url)
-    return {"ok": True, "target": saved}
+    upsert_monitored_target(name=name, base_url=base_url)
+    verification = verify_monitored_target(name)
+    if not verification:
+        raise HTTPException(status_code=404, detail="target was not found after it was saved")
+    return {
+        "ok": True,
+        "connected": verification["connected"],
+        "target": verification["target"],
+        "verification": {
+            key: verification[key]
+            for key in ("connected", "status", "probe_error", "latency_ms", "verified_at")
+        },
+    }
+
+
+@router.post("/targets/{name}/verify")
+def verify_target(name: str):
+    verification = verify_monitored_target(name)
+    if not verification:
+        raise HTTPException(status_code=404, detail="target not found")
+    return {
+        "ok": True,
+        "connected": verification["connected"],
+        "target": verification["target"],
+        "verification": {
+            key: verification[key]
+            for key in ("connected", "status", "probe_error", "latency_ms", "verified_at")
+        },
+    }
 
 
 @router.delete("/targets/{name}")

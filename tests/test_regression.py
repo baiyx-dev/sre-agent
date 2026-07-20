@@ -54,6 +54,8 @@ from backend.storage.repositories import (
     save_execution_audit,
     save_task_run,
     touch_worker_heartbeat,
+    upsert_monitored_target,
+    record_monitored_target_verification,
     verify_audit_ledger,
     worker_heartbeat_status,
 )
@@ -1656,12 +1658,61 @@ class RegressionTests(unittest.TestCase):
                         onboarding.json()["paid_upgrade"]["payment_automation"]
                     )
 
-                    target = client.post(
-                        "/settings/targets",
-                        headers=admin_headers,
-                        json={"name": "trial-api", "base_url": "https://example.com/health"},
-                    )
+                    with patch(
+                        "backend.tools.target_probe._probe_target",
+                        return_value=("down", None, "connection_error"),
+                    ):
+                        target = client.post(
+                            "/settings/targets",
+                            headers=admin_headers,
+                            json={"name": "trial-api", "base_url": "https://example.com/health"},
+                        )
                     self.assertEqual(target.status_code, 200)
+                    self.assertFalse(target.json()["connected"])
+                    self.assertEqual(
+                        target.json()["target"]["verification_status"],
+                        "down",
+                    )
+
+                    failed_target_onboarding = client.get(
+                        "/trial/onboarding",
+                        headers=admin_headers,
+                    )
+                    self.assertEqual(
+                        failed_target_onboarding.json()["progress_percent"],
+                        20,
+                    )
+                    self.assertEqual(
+                        failed_target_onboarding.json()["configured_target_count"],
+                        1,
+                    )
+                    self.assertEqual(
+                        failed_target_onboarding.json()["verified_target_count"],
+                        0,
+                    )
+                    self.assertEqual(
+                        failed_target_onboarding.json()["next_milestone"]["id"],
+                        "target_configured",
+                    )
+
+                    with patch(
+                        "backend.tools.target_probe._probe_target",
+                        return_value=("running", 12.5, None),
+                    ):
+                        verified_target = client.post(
+                            "/settings/targets/trial-api/verify",
+                            headers=admin_headers,
+                        )
+                    self.assertEqual(verified_target.status_code, 200)
+                    self.assertTrue(verified_target.json()["connected"])
+                    self.assertEqual(
+                        verified_target.json()["target"]["verification_status"],
+                        "running",
+                    )
+                    self.assertEqual(
+                        verified_target.json()["target"]["last_latency_ms"],
+                        12.5,
+                    )
 
                     conn = get_conn()
                     cur = conn.cursor()
@@ -1994,6 +2045,73 @@ class RegressionTests(unittest.TestCase):
                 self.assertTrue(safe["has_real_data_source"])
         finally:
             os.environ.pop("PROMETHEUS_BASE_URL", None)
+
+    @unittest.skipIf(is_postgres_database(), "isolated SQLite path is used for target verification test")
+    def test_real_data_source_status_requires_a_verified_monitored_target(self):
+        previous_path = os.environ.get("SRE_AGENT_DB_PATH")
+        source_env_names = (
+            "SRE_DATA_API_BASE",
+            "PROMETHEUS_BASE_URL",
+            "LOKI_BASE_URL",
+            "K8S_API_BASE",
+        )
+        previous_sources = {name: os.environ.get(name) for name in source_env_names}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                os.environ["SRE_AGENT_DB_PATH"] = str(Path(temp_dir) / "verified-target.db")
+                for name in source_env_names:
+                    os.environ.pop(name, None)
+                init_db()
+                upsert_monitored_target("customer-api", "https://customer.example.com/health")
+                with patch(
+                    "backend.tools.external_data_source.get_app_setting",
+                    return_value=None,
+                ):
+                    pending = data_source_configuration_status()
+                    self.assertEqual(pending["monitored_target_count"], 1)
+                    self.assertEqual(pending["verified_monitored_target_count"], 0)
+                    self.assertFalse(pending["has_real_data_source"])
+
+                    record_monitored_target_verification(
+                        "customer-api",
+                        status="running",
+                        probe_error=None,
+                        latency_ms=18.4,
+                    )
+                    verified = data_source_configuration_status()
+                    self.assertEqual(verified["verified_monitored_target_count"], 1)
+                    self.assertTrue(verified["has_real_data_source"])
+
+                    record_monitored_target_verification(
+                        "customer-api",
+                        status="down",
+                        probe_error="timeout",
+                        latency_ms=None,
+                    )
+                    temporarily_down = data_source_configuration_status()
+                    self.assertEqual(
+                        temporarily_down["verified_monitored_target_count"],
+                        1,
+                    )
+                    self.assertTrue(temporarily_down["has_real_data_source"])
+
+                    upsert_monitored_target(
+                        "customer-api",
+                        "https://customer.example.com/new-health",
+                    )
+                    changed = data_source_configuration_status()
+                    self.assertEqual(changed["verified_monitored_target_count"], 0)
+                    self.assertFalse(changed["has_real_data_source"])
+            finally:
+                if previous_path is None:
+                    os.environ.pop("SRE_AGENT_DB_PATH", None)
+                else:
+                    os.environ["SRE_AGENT_DB_PATH"] = previous_path
+                for name, value in previous_sources.items():
+                    if value is None:
+                        os.environ.pop(name, None)
+                    else:
+                        os.environ[name] = value
 
     def test_http_exception_returns_request_id_and_error_shape(self):
         with TestClient(app) as client:

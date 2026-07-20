@@ -181,5 +181,8 @@ def readiness(response: Response):
             "configured_data_sources": data_sources["configured_sources"],
             "unsafe_data_sources": data_sources["unsafe_sources"],
             "monitored_target_count": data_sources["monitored_target_count"],
+            "verified_monitored_target_count": data_sources[
+                "verified_monitored_target_count"
+            ],
         },
     }

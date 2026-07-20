@@ -417,6 +417,16 @@ body {
   color: #fff;
 }
 
+.target-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.target-item button.target-verify {
+  background: #2563eb;
+}
+
 .known-services {
   margin: 0;
   font-size: 12px;

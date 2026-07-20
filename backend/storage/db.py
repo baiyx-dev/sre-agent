@@ -26,6 +26,7 @@ MIGRATION_MANIFEST = (
     (9, "subscription_lifecycle", "2026-07-20-commercial-v9"),
     (10, "immutable_billing_statements", "2026-07-20-commercial-v10"),
     (11, "self_service_trial_activation", "2026-07-20-commercial-v11"),
+    (12, "verified_monitored_targets", "2026-07-20-commercial-v12"),
 )
 CURRENT_SCHEMA_VERSION = MIGRATION_MANIFEST[-1][0]
 _POSTGRES_MIGRATION_LOCK_ID = 7_361_904_211
@@ -568,9 +569,30 @@ def _initialize_schema(conn, cur):
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
         base_url TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        created_at TEXT NOT NULL,
+        verification_status TEXT NOT NULL DEFAULT 'pending',
+        last_verified_at TEXT,
+        last_connected_at TEXT,
+        last_probe_error TEXT,
+        last_latency_ms REAL
     )
     """)
+    cur.execute("PRAGMA table_info(monitored_targets)")
+    target_columns = {row["name"] for row in cur.fetchall()}
+    if "verification_status" not in target_columns:
+        _safe_add_column(
+            "monitored_targets",
+            "verification_status",
+            "TEXT NOT NULL DEFAULT 'pending'",
+        )
+    if "last_verified_at" not in target_columns:
+        _safe_add_column("monitored_targets", "last_verified_at", "TEXT")
+    if "last_connected_at" not in target_columns:
+        _safe_add_column("monitored_targets", "last_connected_at", "TEXT")
+    if "last_probe_error" not in target_columns:
+        _safe_add_column("monitored_targets", "last_probe_error", "TEXT")
+    if "last_latency_ms" not in target_columns:
+        _safe_add_column("monitored_targets", "last_latency_ms", "REAL")
 
     # 多轮对话上下文，用于记住最近一次解析出的服务和动作
     cur.execute("""

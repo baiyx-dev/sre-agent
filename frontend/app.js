@@ -1073,12 +1073,31 @@ async function fetchTargets() {
       const row = document.createElement("div");
       row.className = "target-item";
       const label = document.createElement("span");
-      label.textContent = `${target.name} -> ${target.base_url}`;
-      const button = document.createElement("button");
-      button.textContent = "删除";
-      button.dataset.targetName = target.name;
+      const statusLabels = {
+        running: "已连通",
+        degraded: "已连通（服务异常）",
+        down: "连接失败",
+        pending: "待验证",
+      };
+      const status = target.verification_status || "pending";
+      const latency = Number(target.last_latency_ms || 0);
+      const latencyCopy = latency > 0 ? ` · ${latency.toFixed(0)}ms` : "";
+      label.textContent = `${target.name} · ${statusLabels[status] || status}${latencyCopy} -> ${target.base_url}`;
+      const actions = document.createElement("span");
+      actions.className = "target-actions";
+      const verifyButton = document.createElement("button");
+      verifyButton.className = "target-verify";
+      verifyButton.textContent = "重试验证";
+      verifyButton.dataset.targetName = target.name;
+      verifyButton.dataset.targetAction = "verify";
+      const deleteButton = document.createElement("button");
+      deleteButton.textContent = "删除";
+      deleteButton.dataset.targetName = target.name;
+      deleteButton.dataset.targetAction = "delete";
+      actions.appendChild(verifyButton);
+      actions.appendChild(deleteButton);
       row.appendChild(label);
-      row.appendChild(button);
+      row.appendChild(actions);
       targetsListEl.appendChild(row);
     });
   } catch (error) {
@@ -1109,15 +1128,51 @@ async function addTarget() {
       setConfigStatus(data.detail || "添加失败");
       return;
     }
+    await fetchTargets();
+    if (!data.connected) {
+      const reason = data.verification && data.verification.probe_error
+        ? data.verification.probe_error
+        : "目标不可达";
+      setConfigStatus(`已保存，但连接验证失败：${reason}。请检查地址后重试。`);
+      await fetchTrialOnboarding();
+      return;
+    }
     targetNameInputEl.value = "";
     targetUrlInputEl.value = "";
-    setConfigStatus(`已添加监测目标：${name}`);
-    await fetchTargets();
+    setConfigStatus(`已验证并接入监测目标：${name}`);
     await fetchKnownServices();
     await fetchTrialOnboarding();
     closeOnboardingModal();
   } catch (error) {
     setConfigStatus("添加失败");
+  }
+}
+
+async function verifyTarget(name) {
+  if (!name) return;
+  setConfigStatus(`正在验证：${name}`);
+  try {
+    const response = await apiFetch(`/settings/targets/${encodeURIComponent(name)}/verify`, {
+      method: "POST",
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      setConfigStatus(data.detail || "验证失败");
+      return;
+    }
+    if (data.connected) {
+      setConfigStatus(`连接验证成功：${name}`);
+      await fetchKnownServices();
+    } else {
+      const reason = data.verification && data.verification.probe_error
+        ? data.verification.probe_error
+        : "目标不可达";
+      setConfigStatus(`连接验证失败：${reason}`);
+    }
+    await fetchTargets();
+    await fetchTrialOnboarding();
+  } catch (error) {
+    setConfigStatus("验证失败");
   }
 }
 
@@ -1326,7 +1381,13 @@ if (targetsListEl) {
     if (!(target instanceof HTMLElement)) return;
     const name = target.dataset.targetName;
     if (!name) return;
-    await deleteTarget(name);
+    if (target.dataset.targetAction === "verify") {
+      await verifyTarget(name);
+      return;
+    }
+    if (target.dataset.targetAction === "delete") {
+      await deleteTarget(name);
+    }
   });
 }
 

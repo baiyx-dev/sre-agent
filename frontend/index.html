@@ -172,11 +172,11 @@
   <div id="onboardingModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="onboardingModalTitle">
     <div class="modal-card onboarding-card">
       <h3 id="onboardingModalTitle">快速接入服务</h3>
-      <p class="onboarding-copy">填一个服务名和健康检查地址，就能开始做基础探测、状态查询和排障。</p>
+      <p class="onboarding-copy">填一个服务名和健康检查地址；连接验证成功后，才能开始真实状态查询和排障。</p>
       <div class="target-row modal-target-row">
         <input id="targetNameInput" type="text" placeholder="服务名，例如 prod-api" />
         <input id="targetUrlInput" type="text" placeholder="服务地址，例如 https://api.example.com/health" />
-        <button id="addTargetBtn">添加监测</button>
+        <button id="addTargetBtn">添加并验证</button>
       </div>
       <p id="dataApiBaseStatus" class="modal-status"></p>
       <div class="onboarding-list-title">已接入目标</div>

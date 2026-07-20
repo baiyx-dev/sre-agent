@@ -103,7 +103,7 @@ SRE Agent 是一个面向服务运维场景的 AI Copilot 项目。
 - 执行审计
 - 会话上下文
 - 应用设置
-- 主动监测目标
+- 主动监测目标及最近一次连接验证事实
 
 
 ### 5. Evaluation Layer
@@ -350,7 +350,7 @@ SRE_CHANGE_JOB_MAX_ATTEMPTS=1
 - API 认证默认开启；至少配置一个高强度 API Key，管理员 Key 同时拥有 viewer/operator 权限
 - 当前商业交付采用每客户独立部署、每实例一个工作区；工作区 API Key 只保存 SHA-256 摘要，可撤销并按月计量
 - 开发环境默认写入演示服务；生产环境默认 `SRE_SEED_DEMO_DATA=false`，不会把演示数据当成客户数据
-- 生产环境默认 `SRE_REQUIRE_REAL_DATA_SOURCE=true`；至少配置统一 SRE API、Prometheus、Loki、Kubernetes API 或一个受监控目标且地址通过 SSRF 校验，readiness 才会通过。唯一例外是启用自助领取的 trial onboarding 宽限；升级为付费套餐后恢复严格门禁
+- 生产环境默认 `SRE_REQUIRE_REAL_DATA_SOURCE=true`；至少配置统一 SRE API、Prometheus、Loki、Kubernetes API，或让一个受监控目标通过实际连接验证，readiness 才会通过。仅保存一个不可达 URL 不算真实数据源。唯一例外是启用自助领取的 trial onboarding 宽限；升级为付费套餐后恢复严格门禁
 - `SRE_REQUIRE_REAL_DATA_SOURCE=false` 只用于隔离评估，不能作为付费试点或生产验收依据
 - `SRE_MONTHLY_REQUEST_LIMIT=0` 表示不限请求；trial/starter/team 的建议默认值分别为 1,000/10,000/100,000
 - trial 默认在首次初始化时固化到期时间；邀请制试用可设置 `SRE_TRIAL_START_MODE=activation`，领取后才开始计时并签发首把 admin 工作区 Key。两种模式重启都不会延期，详见 [FREE_TRIAL.md](docs/FREE_TRIAL.md)
@@ -566,14 +566,15 @@ payment-service 状态
 - `PUT /settings/data-source`
 - `POST /settings/data-source/test`
 - `GET /settings/targets`
-- `POST /settings/targets`
+- `POST /settings/targets`：保存后立即执行真实连接验证
+- `POST /settings/targets/{name}/verify`：重试连接验证并持久化最近状态
 - `DELETE /settings/targets/{name}`
 
 ### Workspace / Billing
 
 - `GET /trial/status`：公开查询该独立实例是否可领取，不返回工作区或联系人信息
 - `POST /trial/activate`：使用邀请令牌一次性启动试用并领取首把 admin 工作区 Key
-- `GET /trial/onboarding`：查看接入、有证据的首次查询/诊断、首次价值证据来源数和反馈里程碑
+- `GET /trial/onboarding`：查看已验证接入、有证据的首次查询/诊断、首次价值证据来源数和反馈里程碑
 - `POST /trial/feedback`：幂等提交评分、价值结果、付费意向和缺失能力
 - `GET /trial/conversion-metrics`：管理员查看首次价值时间和试用转化证据
 
@@ -599,7 +600,7 @@ payment-service 状态
 
 ## 外部数据源约定
 
-生产启动不会自动灌入演示服务，并由 `/health/ready` 的 `real_data_source` 检查阻止“空壳正常”。该检查验证至少一个数据源或受监控目标已经配置且 URL 安全；数据源的真实权限、连通性和数据质量仍需使用设置页测试与试点验收脚本验证。
+生产启动不会自动灌入演示服务，并由 `/health/ready` 的 `real_data_source` 检查阻止“空壳正常”。统一 SRE API、Prometheus、Loki、Kubernetes API 必须至少有一个安全配置；主动监测目标则必须完成一次实际连接验证，仅保存 URL 不会通过门禁。数据源的真实权限和数据质量仍需使用设置页测试与试点验收脚本验证。
 
 如果接入统一 SRE API，推荐提供以下接口：
 

@@ -60,15 +60,22 @@ def data_source_configuration_status() -> dict:
         except UnsafeOutboundUrl:
             unsafe.append(name)
     try:
-        target_count = len(list_monitored_targets())
+        targets = list_monitored_targets()
     except Exception:
-        target_count = 0
+        targets = []
+    target_count = len(targets)
+    verified_target_count = sum(
+        1
+        for target in targets
+        if target.get("last_connected_at")
+    )
     return {
         "configured_sources": configured,
         "configured_source_count": len(configured),
         "unsafe_sources": unsafe,
         "monitored_target_count": target_count,
-        "has_real_data_source": bool(configured),
+        "verified_monitored_target_count": verified_target_count,
+        "has_real_data_source": bool(configured or verified_target_count),
     }
 
 
