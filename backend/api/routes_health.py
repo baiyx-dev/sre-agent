@@ -70,6 +70,15 @@ def readiness(response: Response):
     trial_data_source_onboarding_grace = bool(
         trial_activation["enabled"] and workspace.get("plan") == "trial"
     )
+    production_self_service_trial = bool(
+        production
+        and trial_activation.get("enabled")
+        and workspace.get("plan") == "trial"
+    )
+    trial_recovery_admin_configured = bool(auth["strong_admin_configured"])
+    trial_upgrade_contact_configured = bool(
+        trial_activation.get("upgrade_contact_configured")
+    )
     database_backend = database_backend_name()
     allow_production_sqlite = os.getenv(
         "SRE_ALLOW_PRODUCTION_SQLITE",
@@ -102,6 +111,10 @@ def readiness(response: Response):
             and (auth["configured"] or trial_public["claim_available"])
         ),
         "trial_activation": trial_activation["configured"] or trial_public["claimed"],
+        "trial_recovery_admin": (not production_self_service_trial)
+        or trial_recovery_admin_configured,
+        "trial_upgrade_contact": (not production_self_service_trial)
+        or trial_upgrade_contact_configured,
         "execution_guard": (not guard["enabled"] and not production)
         or (guard["enabled"] and guard["token_configured"]),
         "secret_storage": not (production and insecure_database_secrets_enabled()),
@@ -144,6 +157,8 @@ def readiness(response: Response):
             "trial_self_service_enabled": trial_activation["enabled"],
             "trial_claim_available": trial_public["claim_available"],
             "trial_claimed": trial_public["claimed"],
+            "trial_recovery_admin_configured": trial_recovery_admin_configured,
+            "trial_upgrade_contact_configured": trial_upgrade_contact_configured,
             "execution_guard_enabled": guard["enabled"],
             "change_executor_mode": executor["mode"],
             "production_write_enabled": production_write_enabled,

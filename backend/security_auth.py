@@ -20,6 +20,12 @@ load_dotenv()
 
 
 _ROLE_LEVELS = {"viewer": 10, "operator": 20, "admin": 30}
+_PLACEHOLDER_API_KEYS = {
+    "change-me",
+    "replace-me",
+    "replace_with_a_long_random_secret",
+    "your-api-key-here",
+}
 
 
 def _subscription_recovery_path(request: Request) -> bool:
@@ -93,8 +99,22 @@ def _configured_keys() -> list[tuple[str, str]]:
     return result
 
 
+def _strong_api_key(value: str | None) -> bool:
+    normalized = (value or "").strip()
+    return bool(
+        len(normalized) >= 32
+        and normalized.lower() not in _PLACEHOLDER_API_KEYS
+        and not normalized.lower().startswith("replace_with")
+    )
+
+
 def auth_configuration_status() -> dict:
-    configured_roles = [role for role, _ in _configured_keys()]
+    configured_keys = _configured_keys()
+    configured_roles = [role for role, _ in configured_keys]
+    strong_admin_configured = any(
+        role == "admin" and _strong_api_key(value)
+        for role, value in configured_keys
+    )
     try:
         workspace_key_count = count_active_workspace_api_keys()
     except Exception:
@@ -103,6 +123,7 @@ def auth_configuration_status() -> dict:
         "enabled": is_auth_enabled(),
         "configured": bool(configured_roles or workspace_key_count),
         "configured_roles": configured_roles,
+        "strong_admin_configured": strong_admin_configured,
         "workspace_key_count": workspace_key_count,
     }
 

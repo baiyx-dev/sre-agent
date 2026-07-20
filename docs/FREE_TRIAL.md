@@ -18,6 +18,8 @@ SRE_TRIAL_ACTIVATION_TOKEN=<至少 32 位的唯一随机值>
 SRE_UPGRADE_CONTACT_URL=mailto:sales@example.com
 ```
 
+生产自助试用还必须配置至少 32 位且非占位符的 `SRE_ADMIN_API_KEY`，供客户丢失首把工作区 Key 时恢复。`SRE_UPGRADE_CONTACT_URL` 必须是有效的 `https://` 或 `mailto:` 地址，作为当前人工付费升级入口。`/health/ready` 的 `trial_recovery_admin` 和 `trial_upgrade_contact` 会分别验证这两项，缺少任一项都拒绝上线。
+
 每个客户部署必须使用不同的激活令牌，并通过 Render Secret、Kubernetes Secret、Vault 或同等设施注入。令牌错误会按请求来源和实例总量限速；数据库只保存来源摘要、令牌短指纹和成功状态，不保存令牌明文。
 
 ## 用户领取流程

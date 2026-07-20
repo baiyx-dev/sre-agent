@@ -61,15 +61,20 @@ jobs:
       - name: Self-service trial activation smoke
         env:
           SRE_AGENT_DB_PATH: /tmp/sre-agent-trial-smoke.db
+          SRE_ENVIRONMENT: production
+          SRE_ALLOW_PRODUCTION_SQLITE: "true"
           SRE_AUTH_ENABLED: "true"
+          SRE_ADMIN_API_KEY: ci-trial-recovery-admin-key-000000000001
           SRE_PLAN: trial
           SRE_SUBSCRIPTION_STATUS: trialing
           SRE_TRIAL_START_MODE: activation
           SRE_TRIAL_SELF_SERVICE_ENABLED: "true"
           SRE_TRIAL_ACTIVATION_TOKEN: ci-trial-activation-token-0000000000000001
+          SRE_UPGRADE_CONTACT_URL: mailto:trial-ci@example.invalid
           SRE_TRIAL_DAYS: "14"
           SRE_CHANGE_EXECUTION_MODE: synchronous
-          EXECUTION_GUARD_ENABLED: "false"
+          EXECUTION_GUARD_ENABLED: "true"
+          EXECUTION_GUARD_TOKEN: ci-trial-execution-guard-key-00000000001
         run: |
           python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001 > /tmp/sre-agent-trial.log 2>&1 &
           trial_server_pid=$!

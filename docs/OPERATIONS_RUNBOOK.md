@@ -117,6 +117,6 @@ python -m backend.maintenance purge --apply --confirm PURGE:<workspace-id>
 
 ## Render 托管拓扑
 
-`render.yaml` 是生产最低拓扑：Starter Web、Starter Background Worker 和 Basic PostgreSQL。Web 在每次部署前执行受锁保护的 schema migration，CI 全绿后才自动部署；Web 与 Worker 共用 PostgreSQL，Worker 从 Web 服务引用同一套执行器 URL、Token、allowlist 和生产写开关。首次创建 Blueprint 时必须填写 `SRE_ADMIN_API_KEY`、`EXECUTION_GUARD_TOKEN`，并为 `SRE_DATA_API_BASE` 提供一个经过 allowlist 校验的真实只读数据源，否则 readiness 会按设计拒绝上线。
+`render.yaml` 是生产最低拓扑：Starter Web、Starter Background Worker 和 Basic PostgreSQL。Web 在每次部署前执行受锁保护的 schema migration，CI 全绿后才自动部署；Web 与 Worker 共用 PostgreSQL，Worker 从 Web 服务引用同一套执行器 URL、Token、allowlist 和生产写开关。首次创建自助试用 Blueprint 时必须填写唯一的 `SRE_TRIAL_ACTIVATION_TOKEN`、至少 32 位的 `SRE_ADMIN_API_KEY`、有效的 `SRE_UPGRADE_CONTACT_URL` 和 `EXECUTION_GUARD_TOKEN`。试用 onboarding 阶段允许稍后接入真实只读数据源，但转为付费试点前必须配置并验证数据源，否则 readiness 会按设计拒绝上线。
 
 Free Render Web 会休眠，Free PostgreSQL 会到期且没有备份，Background Worker 也不支持 Free 实例，因此 Free 资源只允许临时演示，不能替换该生产拓扑。启用真实写操作时必须同时核对 Web readiness、Worker 日志和真实执行器幂等验证。

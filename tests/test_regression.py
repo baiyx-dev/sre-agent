@@ -1457,6 +1457,10 @@ class RegressionTests(unittest.TestCase):
                 "SRE_SEED_DEMO_DATA",
                 "SRE_REQUIRE_REAL_DATA_SOURCE",
                 "SRE_OUTBOUND_HOST_ALLOWLIST",
+                "SRE_ENVIRONMENT",
+                "SRE_ALLOW_PRODUCTION_SQLITE",
+                "EXECUTION_GUARD_ENABLED",
+                "EXECUTION_GUARD_TOKEN",
             )
         }
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1491,6 +1495,71 @@ class RegressionTests(unittest.TestCase):
                     self.assertTrue(public.json()["claim_available"])
                     self.assertEqual(public.json()["trial_days"], 14)
 
+                    os.environ["SRE_ENVIRONMENT"] = "production"
+                    os.environ["SRE_ALLOW_PRODUCTION_SQLITE"] = "true"
+                    os.environ["EXECUTION_GUARD_ENABLED"] = "true"
+                    os.environ["EXECUTION_GUARD_TOKEN"] = "trial-readiness-guard"
+                    os.environ.pop("SRE_ADMIN_API_KEY", None)
+                    os.environ.pop("SRE_UPGRADE_CONTACT_URL", None)
+                    missing_delivery_controls = client.get("/health/ready")
+                    self.assertEqual(missing_delivery_controls.status_code, 503)
+                    self.assertFalse(
+                        missing_delivery_controls.json()["checks"][
+                            "trial_recovery_admin"
+                        ]
+                    )
+                    self.assertFalse(
+                        missing_delivery_controls.json()["checks"][
+                            "trial_upgrade_contact"
+                        ]
+                    )
+
+                    os.environ["SRE_ADMIN_API_KEY"] = (
+                        "replace_with_a_long_random_secret"
+                    )
+                    placeholder_recovery = client.get("/health/ready")
+                    self.assertFalse(
+                        placeholder_recovery.json()["checks"][
+                            "trial_recovery_admin"
+                        ]
+                    )
+
+                    os.environ["SRE_ADMIN_API_KEY"] = "weak-trial-recovery-key"
+                    weak_recovery = client.get("/health/ready")
+                    self.assertFalse(
+                        weak_recovery.json()["checks"]["trial_recovery_admin"]
+                    )
+
+                    os.environ["SRE_ADMIN_API_KEY"] = (
+                        "trial-recovery-admin-key-000000000001"
+                    )
+                    recovery_only = client.get("/health/ready")
+                    self.assertTrue(
+                        recovery_only.json()["checks"]["trial_recovery_admin"]
+                    )
+                    self.assertFalse(
+                        recovery_only.json()["checks"]["trial_upgrade_contact"]
+                    )
+
+                    os.environ["SRE_UPGRADE_CONTACT_URL"] = "https://example.com/upgrade"
+                    production_ready = client.get("/health/ready")
+                    self.assertEqual(production_ready.status_code, 200)
+                    self.assertTrue(
+                        production_ready.json()["details"][
+                            "trial_recovery_admin_configured"
+                        ]
+                    )
+                    self.assertTrue(
+                        production_ready.json()["details"][
+                            "trial_upgrade_contact_configured"
+                        ]
+                    )
+
+                    os.environ["SRE_ENVIRONMENT"] = "development"
+                    os.environ.pop("SRE_ALLOW_PRODUCTION_SQLITE", None)
+                    os.environ["EXECUTION_GUARD_ENABLED"] = "false"
+                    os.environ.pop("EXECUTION_GUARD_TOKEN", None)
+                    os.environ.pop("SRE_ADMIN_API_KEY", None)
                     ready = client.get("/health/ready")
                     self.assertEqual(ready.status_code, 200)
                     self.assertTrue(ready.json()["checks"]["trial_activation"])

@@ -16,6 +16,7 @@
 - 认证、执行保护均开启；环境 Bootstrap Key 和 Guard Token 来自密钥管理器。
 - 生产关闭数据库密钥存储，外部地址采用精确 allowlist，禁止通配内网访问。
 - 已接入一个真实 Prometheus、Loki 和 Kubernetes 集群，并验证查询权限只读。
+- 自助试用实例已配置至少 32 位的恢复管理员 Key 和有效升级联系地址，`/health/ready` 的 `trial_recovery_admin`、`trial_upgrade_contact` 均为 true。
 - 生产未灌入演示服务；`/health/ready` 的 `real_data_source` 为 true，并已实际查询到带时间戳的客户遥测数据。
 - 若开放写操作，Webhook executor 已在测试环境完成幂等、超时、失败和发布后健康验证。
 - 依赖审计、全部回归测试、容器非 root 检查和 PostgreSQL CI 均通过。

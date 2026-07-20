@@ -354,6 +354,7 @@ SRE_CHANGE_JOB_MAX_ATTEMPTS=1
 - `SRE_REQUIRE_REAL_DATA_SOURCE=false` 只用于隔离评估，不能作为付费试点或生产验收依据
 - `SRE_MONTHLY_REQUEST_LIMIT=0` 表示不限请求；trial/starter/team 的建议默认值分别为 1,000/10,000/100,000
 - trial 默认在首次初始化时固化到期时间；邀请制试用可设置 `SRE_TRIAL_START_MODE=activation`，领取后才开始计时并签发首把 admin 工作区 Key。两种模式重启都不会延期，详见 [FREE_TRIAL.md](docs/FREE_TRIAL.md)
+- 生产自助试用的 readiness 强制要求至少 32 位且非占位符的 `SRE_ADMIN_API_KEY` 作为密钥丢失恢复通道，并要求有效的 `SRE_UPGRADE_CONTACT_URL` 作为人工付费升级入口；缺少任一项都会返回 503
 - 到期、暂停或超过付款宽限期后，业务 API 返回 402，但身份、工作区、监控、账单、价值报告和试用反馈仍可访问。升级与续费流程见 [SUBSCRIPTION_LIFECYCLE.md](docs/SUBSCRIPTION_LIFECYCLE.md)
 - 套餐权限由服务端强制执行：trial/starter 只允许诊断和 dry-run，team/enterprise 才能在其余生产安全门禁全部通过后执行真实变更；工作区密钥上限依次为 3/10/50/不限
 - 生产环境的 Bootstrap Key 在创建工作区密钥后只允许账户恢复与商业控制面调用，日常业务必须使用可计量的工作区 Key，避免绕过额度
