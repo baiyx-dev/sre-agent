@@ -21,6 +21,7 @@
 - 若开放写操作，Webhook executor 已在测试环境完成幂等、超时、失败和发布后健康验证。
 - 依赖审计、全部回归测试、容器非 root 检查和 PostgreSQL CI 均通过。
 - 全新可销毁实例已运行一次 `scripts/trial_activation_smoke.py --confirm-disposable-instance`；已领取实例的 `scripts/smoke_test.py` 与目标容量参数下的 `scripts/load_smoke.py` 均通过，结果归档并形成客户 SLO 基线。
+- 本地交付使用 `compose.yaml + compose.trial.yaml`，CI 已真实启动 PostgreSQL、Web、Worker 并通过完整领取验收；客户卷未使用 `down --volumes` 删除。
 - 完成一次备份恢复演练，记录实际 RTO/RPO。
 - `/audit/verify` 返回 `valid=true`，当前链头已写入客户侧不可变归档并完成一次恢复后复验。
 

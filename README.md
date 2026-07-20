@@ -391,7 +391,9 @@ uvicorn backend.main:app --reload --port 8000
 docker compose up --build
 ```
 
-生产镜像以非 root 用户运行，并使用 `/health/ready` 作为容器健康检查。`compose.yaml` 中关闭认证和执行保护的配置只适用于本机演示；Web 和 Worker 通过 PostgreSQL 共享变更队列。
+生产镜像以非 root 用户运行，并使用 `/health/ready` 作为容器健康检查。`compose.yaml` 中关闭认证和执行保护的配置只适用于本机演示；Web 和 Worker 通过 PostgreSQL 共享变更队列，端口默认只绑定 `127.0.0.1`。
+
+要运行带生产门禁的本地免费试用栈，先生成不提交到 Git 的随机密钥，再叠加 `compose.trial.yaml`；完整命令、一次性领取验收和数据保留说明见 [本地生产模式免费试用部署](docs/LOCAL_TRIAL_DEPLOYMENT.md)。
 
 单节点试点的备份、恢复和队列 Worker 操作见 [运维手册](docs/OPERATIONS_RUNBOOK.md)。
 

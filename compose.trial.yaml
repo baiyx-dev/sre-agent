@@ -1,0 +1,41 @@
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${SRE_POSTGRES_PASSWORD:?Run scripts/generate_trial_env.py first}
+
+  sre-agent:
+    environment:
+      SRE_ENVIRONMENT: production
+      SRE_LOG_FORMAT: json
+      SRE_SEED_DEMO_DATA: "false"
+      SRE_REQUIRE_REAL_DATA_SOURCE: "true"
+      SRE_AUTH_ENABLED: "true"
+      SRE_ADMIN_API_KEY: ${SRE_ADMIN_API_KEY:?Run scripts/generate_trial_env.py first}
+      EXECUTION_GUARD_ENABLED: "true"
+      EXECUTION_GUARD_TOKEN: ${EXECUTION_GUARD_TOKEN:?Run scripts/generate_trial_env.py first}
+      SRE_ALLOW_INSECURE_DB_SECRETS: "false"
+      SRE_ALLOW_PRODUCTION_SQLITE: "false"
+      SRE_PLAN: trial
+      SRE_SUBSCRIPTION_STATUS: trialing
+      SRE_TRIAL_DAYS: ${SRE_TRIAL_DAYS:-14}
+      SRE_TRIAL_START_MODE: activation
+      SRE_TRIAL_SELF_SERVICE_ENABLED: "true"
+      SRE_TRIAL_ACTIVATION_TOKEN: ${SRE_TRIAL_ACTIVATION_TOKEN:?Run scripts/generate_trial_env.py first}
+      SRE_UPGRADE_CONTACT_URL: ${SRE_UPGRADE_CONTACT_URL:?Run scripts/generate_trial_env.py first}
+      SRE_CHANGE_EXECUTION_MODE: queued
+      SRE_CHANGE_EXECUTOR: simulation
+      SRE_PRODUCTION_WRITE_ENABLED: "false"
+      DATABASE_URL: postgresql://sre_agent:${SRE_POSTGRES_PASSWORD}@postgres:5432/sre_agent
+
+  change-worker:
+    environment:
+      SRE_ENVIRONMENT: production
+      SRE_LOG_FORMAT: json
+      SRE_PLAN: trial
+      SRE_SUBSCRIPTION_STATUS: trialing
+      SRE_TRIAL_DAYS: ${SRE_TRIAL_DAYS:-14}
+      SRE_TRIAL_START_MODE: activation
+      SRE_CHANGE_EXECUTION_MODE: queued
+      SRE_CHANGE_EXECUTOR: simulation
+      SRE_PRODUCTION_WRITE_ENABLED: "false"
+      DATABASE_URL: postgresql://sre_agent:${SRE_POSTGRES_PASSWORD}@postgres:5432/sre_agent
