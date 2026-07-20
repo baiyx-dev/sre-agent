@@ -32,6 +32,42 @@ const targetsListEl = document.getElementById("targetsList");
 const openOnboardingBtnEl = document.getElementById("openOnboardingBtn");
 const onboardingModalEl = document.getElementById("onboardingModal");
 const onboardingCloseBtnEl = document.getElementById("onboardingCloseBtn");
+const apiKeyInputEl = document.getElementById("apiKeyInput");
+const guardTokenInputEl = document.getElementById("guardTokenInput");
+const connectApiBtnEl = document.getElementById("connectApiBtn");
+const authStatusEl = document.getElementById("authStatus");
+const workspaceNameEl = document.getElementById("workspaceName");
+const workspacePlanEl = document.getElementById("workspacePlan");
+const workspaceSubscriptionEl = document.getElementById("workspaceSubscription");
+const workspaceUsageTextEl = document.getElementById("workspaceUsageText");
+const workspaceUsageBarEl = document.getElementById("workspaceUsageBar");
+const workspaceUsageHintEl = document.getElementById("workspaceUsageHint");
+const workspaceEntitlementEl = document.getElementById("workspaceEntitlement");
+const trialGuideEl = document.getElementById("trialGuide");
+const trialGuideTitleEl = document.getElementById("trialGuideTitle");
+const trialProgressTextEl = document.getElementById("trialProgressText");
+const trialProgressBarEl = document.getElementById("trialProgressBar");
+const trialMilestonesEl = document.getElementById("trialMilestones");
+const trialNextActionBtnEl = document.getElementById("trialNextActionBtn");
+const trialUpgradeLinkEl = document.getElementById("trialUpgradeLink");
+const trialFeedbackPanelEl = document.getElementById("trialFeedbackPanel");
+const trialRatingInputEl = document.getElementById("trialRatingInput");
+const trialOutcomeInputEl = document.getElementById("trialOutcomeInput");
+const trialPurchaseIntentInputEl = document.getElementById("trialPurchaseIntentInput");
+const trialMissingFeatureInputEl = document.getElementById("trialMissingFeatureInput");
+const trialNotesInputEl = document.getElementById("trialNotesInput");
+const trialContactConsentInputEl = document.getElementById("trialContactConsentInput");
+const trialFeedbackBtnEl = document.getElementById("trialFeedbackBtn");
+const trialFeedbackStatusEl = document.getElementById("trialFeedbackStatus");
+const trialActivationModalEl = document.getElementById("trialActivationModal");
+const trialActivationCopyEl = document.getElementById("trialActivationCopy");
+const trialActivationTokenInputEl = document.getElementById("trialActivationTokenInput");
+const trialWorkspaceNameInputEl = document.getElementById("trialWorkspaceNameInput");
+const trialAdminNameInputEl = document.getElementById("trialAdminNameInput");
+const trialContactEmailInputEl = document.getElementById("trialContactEmailInput");
+const trialActivationStatusEl = document.getElementById("trialActivationStatus");
+const trialActivationBtnEl = document.getElementById("trialActivationBtn");
+const trialActivationCloseBtnEl = document.getElementById("trialActivationCloseBtn");
 
 const confirmModalEl = document.getElementById("confirmModal");
 const modalActionTypeEl = document.getElementById("modalActionType");
@@ -41,7 +77,293 @@ const modalConfirmBtnEl = document.getElementById("modalConfirmBtn");
 const modalCancelBtnEl = document.getElementById("modalCancelBtn");
 
 let currentPendingAction = null;
+let sreApiKey = "";
+let executionGuardToken = "";
+let latestTrialOnboarding = null;
+let newlyIssuedTrialApiKey = "";
 const chatSessionId = getOrCreateChatSessionId();
+
+try {
+  sreApiKey = window.sessionStorage.getItem("sre-agent-api-key") || "";
+} catch (error) {
+}
+if (apiKeyInputEl) apiKeyInputEl.value = sreApiKey;
+
+function apiFetch(resource, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (sreApiKey) headers.set("X-SRE-API-Key", sreApiKey);
+  return window.fetch(resource, { ...options, headers });
+}
+
+async function fetchPublicTrialStatus() {
+  try {
+    const response = await window.fetch("/trial/status", {
+      headers: { Accept: "application/json" },
+    });
+    const data = await response.json();
+    if (!response.ok) return;
+    if (data.claim_available && trialActivationModalEl) {
+      if (trialActivationCopyEl) {
+        trialActivationCopyEl.textContent = `输入邀请令牌后开始 ${data.trial_days || 14} 天免费试用，并领取首把管理员 API Key。`;
+      }
+      trialActivationModalEl.classList.remove("hidden");
+    }
+  } catch (error) {
+  }
+}
+
+async function activateFreeTrial() {
+  if (!trialActivationBtnEl) return;
+  if (newlyIssuedTrialApiKey) {
+    try {
+      await window.navigator.clipboard.writeText(newlyIssuedTrialApiKey);
+      if (trialActivationStatusEl) trialActivationStatusEl.textContent = "API Key 已复制，可以关闭窗口开始试用。";
+    } catch (error) {
+      if (trialActivationStatusEl) trialActivationStatusEl.textContent = `请手动复制 API Key：${newlyIssuedTrialApiKey}`;
+    }
+    return;
+  }
+  const activationToken = trialActivationTokenInputEl ? trialActivationTokenInputEl.value.trim() : "";
+  const workspaceName = trialWorkspaceNameInputEl ? trialWorkspaceNameInputEl.value.trim() : "";
+  const adminName = trialAdminNameInputEl ? trialAdminNameInputEl.value.trim() : "";
+  const contactEmail = trialContactEmailInputEl ? trialContactEmailInputEl.value.trim() : "";
+  if (!activationToken || !workspaceName || !adminName || !contactEmail) {
+    if (trialActivationStatusEl) trialActivationStatusEl.textContent = "请完整填写邀请令牌、工作区、管理员和邮箱。";
+    return;
+  }
+  trialActivationBtnEl.disabled = true;
+  if (trialActivationStatusEl) trialActivationStatusEl.textContent = "正在创建试用工作区...";
+  try {
+    const response = await window.fetch("/trial/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        activation_token: activationToken,
+        workspace_name: workspaceName,
+        admin_name: adminName,
+        contact_email: contactEmail,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      if (trialActivationStatusEl) trialActivationStatusEl.textContent = data.detail || "试用激活失败";
+      return;
+    }
+    newlyIssuedTrialApiKey = data.api_key || "";
+    sreApiKey = newlyIssuedTrialApiKey;
+    if (apiKeyInputEl) apiKeyInputEl.value = sreApiKey;
+    try {
+      window.sessionStorage.setItem("sre-agent-api-key", sreApiKey);
+    } catch (error) {
+    }
+    if (trialActivationTokenInputEl) trialActivationTokenInputEl.value = "";
+    if (trialActivationStatusEl) {
+      trialActivationStatusEl.textContent = `激活成功。API Key（仅展示一次）：${newlyIssuedTrialApiKey}`;
+    }
+    trialActivationBtnEl.textContent = "复制 API Key";
+    await connectAndLoad();
+  } catch (error) {
+    if (trialActivationStatusEl) trialActivationStatusEl.textContent = "试用激活失败，请检查网络后重试。";
+  } finally {
+    trialActivationBtnEl.disabled = false;
+  }
+}
+
+function renderTrialOnboarding(data) {
+  latestTrialOnboarding = data;
+  if (!trialGuideEl) return;
+  const subscription = data.subscription || {};
+  if (subscription.plan !== "trial") {
+    trialGuideEl.classList.add("hidden");
+    return;
+  }
+  trialGuideEl.classList.remove("hidden");
+  const progress = Number(data.progress_percent || 0);
+  if (trialGuideTitleEl) {
+    trialGuideTitleEl.textContent = progress >= 100
+      ? "免费试用验证已完成"
+      : "完成首次价值验证";
+  }
+  if (trialProgressTextEl) trialProgressTextEl.textContent = `${progress}%`;
+  if (trialProgressBarEl) trialProgressBarEl.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+  if (trialMilestonesEl) {
+    trialMilestonesEl.replaceChildren();
+    (data.milestones || []).forEach((milestone) => {
+      const item = document.createElement("div");
+      item.className = `trial-milestone${milestone.completed ? " complete" : ""}`;
+      item.textContent = `${milestone.completed ? "✓" : "○"} ${milestone.label}`;
+      trialMilestonesEl.appendChild(item);
+    });
+  }
+  const next = data.next_milestone || null;
+  if (trialNextActionBtnEl) {
+    trialNextActionBtnEl.dataset.milestoneId = next ? next.id : "complete";
+    trialNextActionBtnEl.textContent = next ? (next.next_action || "继续下一步") : "试用流程已完成";
+    trialNextActionBtnEl.disabled = !next;
+  }
+  const paidUpgrade = data.paid_upgrade || {};
+  if (trialUpgradeLinkEl && paidUpgrade.available && paidUpgrade.contact_url) {
+    trialUpgradeLinkEl.href = paidUpgrade.contact_url;
+    trialUpgradeLinkEl.classList.remove("hidden");
+  } else if (trialUpgradeLinkEl) {
+    trialUpgradeLinkEl.classList.add("hidden");
+  }
+}
+
+async function fetchTrialOnboarding() {
+  if (!sreApiKey) return;
+  try {
+    const response = await apiFetch("/trial/onboarding");
+    const data = await response.json();
+    if (response.ok) renderTrialOnboarding(data);
+  } catch (error) {
+  }
+}
+
+function continueTrialOnboarding() {
+  const milestoneId = trialNextActionBtnEl ? trialNextActionBtnEl.dataset.milestoneId : "";
+  if (milestoneId === "target_configured") {
+    openOnboardingModal();
+  } else if (milestoneId === "first_query") {
+    messageInputEl.value = "payment-service 状态";
+    messageInputEl.focus();
+  } else if (milestoneId === "first_diagnosis") {
+    messageInputEl.value = "payment-service 报警了，帮我排查";
+    messageInputEl.focus();
+  } else if (milestoneId === "feedback_submitted" && trialFeedbackPanelEl) {
+    trialFeedbackPanelEl.open = true;
+    trialFeedbackPanelEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+}
+
+function trialFeedbackIdempotencyKey() {
+  const storageKey = "sre-agent-trial-feedback-idempotency";
+  try {
+    const existing = window.localStorage.getItem(storageKey);
+    if (existing) return existing;
+    const created = generateSessionId();
+    window.localStorage.setItem(storageKey, created);
+    return created;
+  } catch (error) {
+    return generateSessionId();
+  }
+}
+
+async function submitTrialFeedback() {
+  if (!trialFeedbackBtnEl) return;
+  trialFeedbackBtnEl.disabled = true;
+  if (trialFeedbackStatusEl) trialFeedbackStatusEl.textContent = "提交中...";
+  try {
+    const response = await apiFetch("/trial/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        idempotency_key: trialFeedbackIdempotencyKey(),
+        rating: Number(trialRatingInputEl ? trialRatingInputEl.value : 5),
+        outcome: trialOutcomeInputEl ? trialOutcomeInputEl.value : "not_evaluated",
+        purchase_intent: trialPurchaseIntentInputEl ? trialPurchaseIntentInputEl.value : "maybe",
+        missing_feature: trialMissingFeatureInputEl ? trialMissingFeatureInputEl.value.trim() || null : null,
+        notes: trialNotesInputEl ? trialNotesInputEl.value.trim() || null : null,
+        contact_consent: Boolean(trialContactConsentInputEl && trialContactConsentInputEl.checked),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      if (trialFeedbackStatusEl) trialFeedbackStatusEl.textContent = data.detail || "反馈提交失败";
+      return;
+    }
+    try {
+      window.localStorage.removeItem("sre-agent-trial-feedback-idempotency");
+    } catch (error) {
+    }
+    if (trialFeedbackStatusEl) trialFeedbackStatusEl.textContent = "感谢反馈，已纳入试用转化分析。";
+    await fetchTrialOnboarding();
+  } catch (error) {
+    if (trialFeedbackStatusEl) trialFeedbackStatusEl.textContent = "反馈提交失败，请稍后重试。";
+  } finally {
+    trialFeedbackBtnEl.disabled = false;
+  }
+}
+
+async function verifyAccess() {
+  try {
+    const response = await apiFetch("/auth/me");
+    const data = await response.json();
+    if (!response.ok) {
+      if (authStatusEl) authStatusEl.textContent = data.detail || "认证失败";
+      return false;
+    }
+    if (authStatusEl) authStatusEl.textContent = `已连接：${data.role} · ${data.workspace_id || "default"}`;
+    return true;
+  } catch (error) {
+    if (authStatusEl) authStatusEl.textContent = "无法连接后端";
+    return false;
+  }
+}
+
+async function fetchWorkspaceUsage() {
+  if (!workspaceNameEl || !workspaceUsageTextEl) return;
+  try {
+    const [workspaceResponse, usageResponse] = await Promise.all([
+      apiFetch("/workspace"),
+      apiFetch("/billing/usage"),
+    ]);
+    const workspaceData = await workspaceResponse.json();
+    const usageData = await usageResponse.json();
+    if (!workspaceResponse.ok || !usageResponse.ok) {
+      workspaceNameEl.textContent = usageData.detail || workspaceData.detail || "读取失败";
+      return;
+    }
+    const workspace = workspaceData.workspace || {};
+    const used = Number(usageData.requests_used || 0);
+    const limit = Number(usageData.monthly_request_limit || 0);
+    const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    workspaceNameEl.textContent = workspace.name || workspace.id || "default";
+    if (workspacePlanEl) workspacePlanEl.textContent = workspace.plan || usageData.plan || "-";
+    if (workspaceSubscriptionEl) {
+      const subscription = workspace.subscription || usageData.subscription || {};
+      const statusLabels = {
+        trialing: "试用中",
+        active: "已订阅",
+        grace_period: "付款宽限期",
+        canceling: "将在周期末取消",
+        expired: "试用已到期",
+        past_due: "付款逾期",
+        suspended: "已暂停",
+        canceled: "已取消",
+        configuration_error: "订阅配置异常",
+      };
+      const remaining = Number(subscription.days_remaining);
+      const remainingText = subscription.days_remaining != null && Number.isFinite(remaining) && remaining >= 0
+        ? ` · 剩余 ${remaining} 天`
+        : "";
+      workspaceSubscriptionEl.textContent = `${statusLabels[subscription.effective_status] || subscription.effective_status || "状态未知"}${remainingText}`;
+      workspaceSubscriptionEl.classList.toggle("blocked", subscription.access_allowed === false);
+    }
+    workspaceUsageTextEl.textContent = limit > 0
+      ? `${used.toLocaleString()} / ${limit.toLocaleString()}`
+      : `${used.toLocaleString()} / 不限`;
+    if (workspaceUsageBarEl) {
+      workspaceUsageBarEl.style.width = limit > 0 ? `${percent}%` : "0%";
+      workspaceUsageBarEl.classList.toggle("near-limit", limit > 0 && percent >= 80);
+    }
+    if (workspaceUsageHintEl) {
+      workspaceUsageHintEl.textContent = usageData.limit_reached
+        ? "额度已用尽；普通请求会返回 429"
+        : `UTC 月度额度${limit > 0 ? `，剩余 ${Math.max(0, limit - used).toLocaleString()}` : "，当前不限量"}`;
+    }
+    if (workspaceEntitlementEl) {
+      const entitlements = workspace.entitlements || usageData.entitlements || {};
+      const writeAccess = entitlements.production_writes
+        ? "含生产变更"
+        : "仅诊断与 dry-run";
+      const maxKeys = Number(entitlements.max_workspace_api_keys || 0);
+      workspaceEntitlementEl.textContent = `${writeAccess} · API Key ${maxKeys > 0 ? `最多 ${maxKeys} 把` : "不限"}`;
+    }
+  } catch (error) {
+    workspaceNameEl.textContent = "读取失败";
+  }
+}
 
 const intentLabels = {
   status_query: "状态检查",
@@ -113,6 +435,20 @@ function formatValue(value) {
   return `${value}`;
 }
 
+function escapeHtml(value) {
+  return String(value ?? "-").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[char]);
+}
+
+function safeCssToken(value) {
+  return String(value || "unknown").replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
 function getStepTitle(action) {
   return stepActionLabels[action] || action || "处理步骤";
 }
@@ -130,29 +466,29 @@ function renderAssessmentCard(assessment) {
       <div class="assessment-header">
         <div>
           <div class="assessment-eyebrow">诊断视图</div>
-          <div class="assessment-summary">${assessment.summary || "-"}</div>
+          <div class="assessment-summary">${escapeHtml(assessment.summary || "-")}</div>
         </div>
         <div class="assessment-badges">
-          <span class="assessment-badge severity-${assessment.severity_assessment || "unknown"}">风险 ${assessment.severity_assessment || "-"}</span>
-          <span class="assessment-badge confidence-${assessment.confidence || "unknown"}">置信度 ${assessment.confidence || "-"}</span>
+          <span class="assessment-badge severity-${safeCssToken(assessment.severity_assessment)}">风险 ${escapeHtml(assessment.severity_assessment || "-")}</span>
+          <span class="assessment-badge confidence-${safeCssToken(assessment.confidence)}">置信度 ${escapeHtml(assessment.confidence || "-")}</span>
         </div>
       </div>
       <div class="assessment-grid">
         <div class="assessment-section">
           <div class="assessment-title">关键证据</div>
-          <ul>${evidence.map((item) => `<li>${item}</li>`).join("") || "<li>-</li>"}</ul>
+          <ul>${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>-</li>"}</ul>
         </div>
         <div class="assessment-section">
           <div class="assessment-title">根因候选</div>
-          <ul>${hypotheses.map((item) => `<li>${item.hypothesis}（${item.confidence}）: ${item.rationale}</li>`).join("") || "<li>-</li>"}</ul>
+          <ul>${hypotheses.map((item) => `<li>${escapeHtml(item.hypothesis)}（${escapeHtml(item.confidence)}）: ${escapeHtml(item.rationale)}</li>`).join("") || "<li>-</li>"}</ul>
         </div>
         <div class="assessment-section">
           <div class="assessment-title">缺失信号</div>
-          <ul>${missingSignals.map((item) => `<li>${item}</li>`).join("") || "<li>-</li>"}</ul>
+          <ul>${missingSignals.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>-</li>"}</ul>
         </div>
         <div class="assessment-section">
           <div class="assessment-title">建议下一步</div>
-          <ul>${nextActions.map((item) => `<li>${item}</li>`).join("") || "<li>-</li>"}</ul>
+          <ul>${nextActions.map((item) => `<li>${escapeHtml(item)}</li>`).join("") || "<li>-</li>"}</ul>
         </div>
       </div>
     </div>
@@ -383,7 +719,7 @@ function renderTimeline(timeline) {
 
 function formatList(values) {
   if (!values || values.length === 0) return "-";
-  return values.join("；");
+  return values.map((value) => escapeHtml(value)).join("；");
 }
 
 function renderPostmortem(postmortem) {
@@ -399,17 +735,17 @@ function renderPostmortem(postmortem) {
     <div class="postmortem-grid">
       <div class="postmortem-section">
         <div class="postmortem-heading">事件概述</div>
-        <div class="postmortem-item">${postmortem.narrative_summary || postmortem.summary || "-"}</div>
+        <div class="postmortem-item">${escapeHtml(postmortem.narrative_summary || postmortem.summary || "-")}</div>
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">基础信息</div>
-        <div class="postmortem-item"><span class="postmortem-label">服务</span>${postmortem.service_name || "-"}</div>
-        <div class="postmortem-item"><span class="postmortem-label">事件类型</span>${postmortem.incident_type || "-"}</div>
-        <div class="postmortem-item"><span class="postmortem-label">当前状态</span>${postmortem.current_status || "-"}</div>
+        <div class="postmortem-item"><span class="postmortem-label">服务</span>${escapeHtml(postmortem.service_name || "-")}</div>
+        <div class="postmortem-item"><span class="postmortem-label">事件类型</span>${escapeHtml(postmortem.incident_type || "-")}</div>
+        <div class="postmortem-item"><span class="postmortem-label">当前状态</span>${escapeHtml(postmortem.current_status || "-")}</div>
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">影响范围</div>
-        <div class="postmortem-item">${impactSummary}</div>
+        <div class="postmortem-item">${escapeHtml(impactSummary)}</div>
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">现象</div>
@@ -417,7 +753,7 @@ function renderPostmortem(postmortem) {
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">疑似根因</div>
-        <div class="postmortem-item">${postmortem.likely_root_cause || "-"}</div>
+        <div class="postmortem-item">${escapeHtml(postmortem.likely_root_cause || "-")}</div>
       </div>
       <div class="postmortem-section">
         <div class="postmortem-heading">已采取动作</div>
@@ -433,7 +769,7 @@ function renderPostmortem(postmortem) {
 
 async function fetchPostmortem(taskRunId) {
   try {
-    const response = await fetch(`/postmortem?task_run_id=${taskRunId}`);
+    const response = await apiFetch(`/postmortem?task_run_id=${taskRunId}`);
     const data = await response.json();
     if (!response.ok) {
       postmortemContainerEl.innerHTML = `<p class="empty">复盘生成失败。</p>`;
@@ -447,7 +783,7 @@ async function fetchPostmortem(taskRunId) {
 
 async function fetchTimeline() {
   try {
-    const response = await fetch("/timeline?limit=20");
+    const response = await apiFetch("/timeline?limit=20");
     const data = await response.json();
     if (!response.ok) {
       return;
@@ -460,18 +796,25 @@ async function fetchTimeline() {
 async function loadDataSourceConfig() {
   if (!dataApiBaseInputEl) return;
   try {
-    const response = await fetch("/settings/data-source");
+    const response = await apiFetch("/settings/data-source");
     const data = await response.json();
     if (!response.ok) return;
     dataApiBaseInputEl.value = data.sre_data_api_base || "";
+    const databaseSecretsAllowed = data.secret_storage_mode === "insecure_database_opt_in";
     if (dataApiTokenInputEl) {
-      dataApiTokenInputEl.value = data.sre_data_api_token || "";
+      dataApiTokenInputEl.value = "";
+      dataApiTokenInputEl.placeholder = databaseSecretsAllowed
+        ? (data.sre_data_api_token_configured ? "已配置；留空不修改" : "可选 Token")
+        : (data.sre_data_api_token_configured ? "已通过环境 Secret 配置" : "请通过环境 Secret 配置");
     }
     if (prometheusBaseInputEl) {
       prometheusBaseInputEl.value = data.prometheus_base_url || "";
     }
     if (prometheusTokenInputEl) {
-      prometheusTokenInputEl.value = data.prometheus_token || "";
+      prometheusTokenInputEl.value = "";
+      prometheusTokenInputEl.placeholder = databaseSecretsAllowed
+        ? (data.prometheus_token_configured ? "已配置；留空不修改" : "可选 Token")
+        : (data.prometheus_token_configured ? "已通过环境 Secret 配置" : "请通过环境 Secret 配置");
     }
     if (prometheusServiceLabelInputEl) {
       prometheusServiceLabelInputEl.value = data.prometheus_service_label || "";
@@ -480,7 +823,10 @@ async function loadDataSourceConfig() {
       lokiBaseInputEl.value = data.loki_base_url || "";
     }
     if (lokiTokenInputEl) {
-      lokiTokenInputEl.value = data.loki_token || "";
+      lokiTokenInputEl.value = "";
+      lokiTokenInputEl.placeholder = databaseSecretsAllowed
+        ? (data.loki_token_configured ? "已配置；留空不修改" : "可选 Token")
+        : (data.loki_token_configured ? "已通过环境 Secret 配置" : "请通过环境 Secret 配置");
     }
     if (lokiServiceLabelInputEl) {
       lokiServiceLabelInputEl.value = data.loki_service_label || "";
@@ -547,35 +893,36 @@ async function saveDataSourceConfig() {
   if (lokiBaseInputEl) {
     lokiBaseInputEl.value = lokiBaseValue;
   }
+  const payload = {
+    sre_data_api_base: baseValue || null,
+    prometheus_base_url: prometheusBaseValue || null,
+    prometheus_service_label: prometheusServiceLabelValue || null,
+    loki_base_url: lokiBaseValue || null,
+    loki_service_label: lokiServiceLabelValue || null,
+    prom_query_up: promQueryUpValue || null,
+    prom_query_replicas: promQueryReplicasValue || null,
+    prom_query_error_rate: promQueryErrorRateValue || null,
+    prom_query_cpu: promQueryCpuValue || null,
+    prom_query_memory: promQueryMemoryValue || null,
+    prom_query_latency_p95_ms: promQueryLatencyValue || null,
+    prom_alert_query: promAlertQueryValue || null,
+    loki_query_template: lokiQueryTemplateValue || null,
+  };
+  if (tokenValue) payload.sre_data_api_token = tokenValue;
+  if (prometheusTokenValue) payload.prometheus_token = prometheusTokenValue;
+  if (lokiTokenValue) payload.loki_token = lokiTokenValue;
   setConfigStatus("保存中...");
   try {
-    const response = await fetch("/settings/data-source", {
+    const response = await apiFetch("/settings/data-source", {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        sre_data_api_base: baseValue || null,
-        sre_data_api_token: tokenValue || null,
-        prometheus_base_url: prometheusBaseValue || null,
-        prometheus_token: prometheusTokenValue || null,
-        prometheus_service_label: prometheusServiceLabelValue || null,
-        loki_base_url: lokiBaseValue || null,
-        loki_token: lokiTokenValue || null,
-        loki_service_label: lokiServiceLabelValue || null,
-        prom_query_up: promQueryUpValue || null,
-        prom_query_replicas: promQueryReplicasValue || null,
-        prom_query_error_rate: promQueryErrorRateValue || null,
-        prom_query_cpu: promQueryCpuValue || null,
-        prom_query_memory: promQueryMemoryValue || null,
-        prom_query_latency_p95_ms: promQueryLatencyValue || null,
-        prom_alert_query: promAlertQueryValue || null,
-        loki_query_template: lokiQueryTemplateValue || null,
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await response.json();
     if (!response.ok || !data.ok) {
-      setConfigStatus("保存失败");
+      setConfigStatus(data.detail || "保存失败");
       return;
     }
     const configured = [
@@ -586,6 +933,7 @@ async function saveDataSourceConfig() {
     setConfigStatus(configured.length > 0
       ? `保存成功，已启用：${configured.join(" / ")}`
       : "已清空，后续请求将使用后端环境变量");
+    await loadDataSourceConfig();
     await fetchKnownServices();
   } catch (error) {
     setConfigStatus("保存失败");
@@ -619,7 +967,7 @@ async function testDataSourceConfig() {
   }
   setConfigStatus("测试中...");
   try {
-    const response = await fetch("/settings/data-source/test", {
+    const response = await apiFetch("/settings/data-source/test", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -662,7 +1010,7 @@ async function testDataSourceConfig() {
 async function fetchKnownServices() {
   if (!knownServicesEl || !serviceNameOptionsEl) return;
   try {
-    const response = await fetch("/services/");
+    const response = await apiFetch("/services/");
     const data = await response.json();
     if (!response.ok) {
       knownServicesEl.textContent = "读取失败";
@@ -690,7 +1038,7 @@ async function fetchKnownServices() {
 async function fetchTargets() {
   if (!targetsListEl) return;
   try {
-    const response = await fetch("/settings/targets");
+    const response = await apiFetch("/settings/targets");
     const data = await response.json();
     if (!response.ok) {
       targetsListEl.textContent = "读取失败";
@@ -700,7 +1048,14 @@ async function fetchTargets() {
     if (targets.length === 0) {
       targetsListEl.textContent = "暂无已接入目标";
       try {
-        if (!window.localStorage.getItem("sre-agent-onboarding-seen")) {
+        const activationModalOpen = Boolean(
+          trialActivationModalEl
+          && !trialActivationModalEl.classList.contains("hidden")
+        );
+        if (
+          !activationModalOpen
+          && !window.localStorage.getItem("sre-agent-onboarding-seen")
+        ) {
           openOnboardingModal();
         }
       } catch (error) {
@@ -713,12 +1068,38 @@ async function fetchTargets() {
     } catch (error) {
     }
 
-    targetsListEl.innerHTML = targets
-      .map(
-        (t) =>
-          `<div class="target-item"><span>${t.name} -> ${t.base_url}</span><button data-target-name="${t.name}">删除</button></div>`
-      )
-      .join("");
+    targetsListEl.replaceChildren();
+    targets.forEach((target) => {
+      const row = document.createElement("div");
+      row.className = "target-item";
+      const label = document.createElement("span");
+      const statusLabels = {
+        running: "已连通",
+        degraded: "已连通（服务异常）",
+        down: "连接失败",
+        pending: "待验证",
+      };
+      const status = target.verification_status || "pending";
+      const latency = Number(target.last_latency_ms || 0);
+      const latencyCopy = latency > 0 ? ` · ${latency.toFixed(0)}ms` : "";
+      label.textContent = `${target.name} · ${statusLabels[status] || status}${latencyCopy} -> ${target.base_url}`;
+      const actions = document.createElement("span");
+      actions.className = "target-actions";
+      const verifyButton = document.createElement("button");
+      verifyButton.className = "target-verify";
+      verifyButton.textContent = "重试验证";
+      verifyButton.dataset.targetName = target.name;
+      verifyButton.dataset.targetAction = "verify";
+      const deleteButton = document.createElement("button");
+      deleteButton.textContent = "删除";
+      deleteButton.dataset.targetName = target.name;
+      deleteButton.dataset.targetAction = "delete";
+      actions.appendChild(verifyButton);
+      actions.appendChild(deleteButton);
+      row.appendChild(label);
+      row.appendChild(actions);
+      targetsListEl.appendChild(row);
+    });
   } catch (error) {
     targetsListEl.textContent = "读取失败";
   }
@@ -735,7 +1116,7 @@ async function addTarget() {
   targetUrlInputEl.value = baseUrl;
   setConfigStatus("添加中...");
   try {
-    const response = await fetch("/settings/targets", {
+    const response = await apiFetch("/settings/targets", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -747,21 +1128,58 @@ async function addTarget() {
       setConfigStatus(data.detail || "添加失败");
       return;
     }
+    await fetchTargets();
+    if (!data.connected) {
+      const reason = data.verification && data.verification.probe_error
+        ? data.verification.probe_error
+        : "目标不可达";
+      setConfigStatus(`已保存，但连接验证失败：${reason}。请检查地址后重试。`);
+      await fetchTrialOnboarding();
+      return;
+    }
     targetNameInputEl.value = "";
     targetUrlInputEl.value = "";
-    setConfigStatus(`已添加监测目标：${name}`);
-    await fetchTargets();
+    setConfigStatus(`已验证并接入监测目标：${name}`);
     await fetchKnownServices();
+    await fetchTrialOnboarding();
     closeOnboardingModal();
   } catch (error) {
     setConfigStatus("添加失败");
   }
 }
 
+async function verifyTarget(name) {
+  if (!name) return;
+  setConfigStatus(`正在验证：${name}`);
+  try {
+    const response = await apiFetch(`/settings/targets/${encodeURIComponent(name)}/verify`, {
+      method: "POST",
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      setConfigStatus(data.detail || "验证失败");
+      return;
+    }
+    if (data.connected) {
+      setConfigStatus(`连接验证成功：${name}`);
+      await fetchKnownServices();
+    } else {
+      const reason = data.verification && data.verification.probe_error
+        ? data.verification.probe_error
+        : "目标不可达";
+      setConfigStatus(`连接验证失败：${reason}`);
+    }
+    await fetchTargets();
+    await fetchTrialOnboarding();
+  } catch (error) {
+    setConfigStatus("验证失败");
+  }
+}
+
 async function deleteTarget(name) {
   if (!name) return;
   try {
-    const response = await fetch(`/settings/targets/${encodeURIComponent(name)}`, {
+    const response = await apiFetch(`/settings/targets/${encodeURIComponent(name)}`, {
       method: "DELETE",
     });
     const data = await response.json();
@@ -778,11 +1196,11 @@ async function deleteTarget(name) {
 }
 
 async function executeConfirmedAction(pendingAction) {
-  const response = await fetch("/chat/confirm", {
+  const headers = { "Content-Type": "application/json" };
+  if (executionGuardToken) headers["X-Guard-Token"] = executionGuardToken;
+  const response = await apiFetch("/chat/confirm", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify({
       session_id: chatSessionId,
       pending_action: pendingAction,
@@ -800,7 +1218,52 @@ async function executeConfirmedAction(pendingAction) {
   appendMessage("assistant", data.final_answer || "没有返回结果");
   renderSteps(data.steps || [], data.assessment_details || null);
   appendAnalysisNote(data);
+  if (data.execution_mode === "queued" && data.change_request_id) {
+    await waitForChangeCompletion(data.change_request_id);
+  }
   await fetchTimeline();
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForChangeCompletion(changeRequestId) {
+  const terminalStatuses = new Set([
+    "executed",
+    "dry_run",
+    "denied",
+    "failed",
+    "unknown",
+    "cancelled",
+    "expired",
+  ]);
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    await delay(1000);
+    try {
+      const response = await apiFetch(`/changes/${encodeURIComponent(changeRequestId)}`);
+      const data = await response.json();
+      if (!response.ok) {
+        appendMessage("assistant", data.detail || "变更状态查询失败");
+        return;
+      }
+      const changeRequest = data.change_request || {};
+      if (!terminalStatuses.has(changeRequest.status)) continue;
+
+      const result = changeRequest.result || {};
+      appendMessage(
+        "assistant",
+        result.final_answer || `变更请求已结束，状态：${changeRequest.status}`,
+      );
+      renderSteps(result.steps || [], result.assessment_details || null);
+      appendAnalysisNote(result);
+      return;
+    } catch (error) {
+      appendMessage("assistant", "变更状态查询失败，请稍后在变更记录中查看。");
+      return;
+    }
+  }
+  appendMessage("assistant", "变更仍在执行中，请稍后查询变更记录。");
 }
 
 async function sendMessage() {
@@ -811,7 +1274,7 @@ async function sendMessage() {
   messageInputEl.value = "";
 
   try {
-    const response = await fetch("/chat", {
+    const response = await apiFetch("/chat", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -834,6 +1297,7 @@ async function sendMessage() {
     renderSteps(data.steps || [], data.assessment_details || null);
     appendAnalysisNote(data);
     await fetchTimeline();
+    await fetchTrialOnboarding();
 
     if (data.requires_confirmation && data.pending_action) {
       openConfirmationModal(data.pending_action);
@@ -917,11 +1381,65 @@ if (targetsListEl) {
     if (!(target instanceof HTMLElement)) return;
     const name = target.dataset.targetName;
     if (!name) return;
-    await deleteTarget(name);
+    if (target.dataset.targetAction === "verify") {
+      await verifyTarget(name);
+      return;
+    }
+    if (target.dataset.targetAction === "delete") {
+      await deleteTarget(name);
+    }
   });
 }
 
-loadDataSourceConfig();
-fetchTargets();
-fetchKnownServices();
-fetchTimeline();
+if (trialNextActionBtnEl) {
+  trialNextActionBtnEl.addEventListener("click", continueTrialOnboarding);
+}
+
+if (trialFeedbackBtnEl) {
+  trialFeedbackBtnEl.addEventListener("click", submitTrialFeedback);
+}
+
+if (trialActivationBtnEl) {
+  trialActivationBtnEl.addEventListener("click", activateFreeTrial);
+}
+
+if (trialActivationCloseBtnEl) {
+  trialActivationCloseBtnEl.addEventListener("click", () => {
+    if (trialActivationModalEl) trialActivationModalEl.classList.add("hidden");
+  });
+}
+
+async function connectAndLoad() {
+  sreApiKey = apiKeyInputEl ? apiKeyInputEl.value.trim() : "";
+  executionGuardToken = guardTokenInputEl ? guardTokenInputEl.value.trim() : "";
+  try {
+    if (sreApiKey) {
+      window.sessionStorage.setItem("sre-agent-api-key", sreApiKey);
+    } else {
+      window.sessionStorage.removeItem("sre-agent-api-key");
+    }
+  } catch (error) {
+  }
+
+  if (!(await verifyAccess())) return;
+  await Promise.all([
+    loadDataSourceConfig(),
+    fetchTargets(),
+    fetchKnownServices(),
+    fetchTimeline(),
+    fetchWorkspaceUsage(),
+    fetchTrialOnboarding(),
+  ]);
+}
+
+if (connectApiBtnEl) {
+  connectApiBtnEl.addEventListener("click", connectAndLoad);
+}
+if (apiKeyInputEl) {
+  apiKeyInputEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") connectAndLoad();
+  });
+}
+
+fetchPublicTrialStatus();
+connectAndLoad();

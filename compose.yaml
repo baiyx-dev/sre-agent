@@ -1,0 +1,76 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sre_agent
+      POSTGRES_USER: sre_agent
+      POSTGRES_PASSWORD: local-sre-agent-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sre_agent -d sre_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  sre-agent:
+    build:
+      context: .
+    ports:
+      - "127.0.0.1:${SRE_HTTP_PORT:-8000}:8000"
+    environment:
+      SRE_ENVIRONMENT: development
+      SRE_AUTH_ENABLED: "false"
+      EXECUTION_GUARD_ENABLED: "false"
+      SRE_ALLOW_INSECURE_DB_SECRETS: "false"
+      SRE_OUTBOUND_HOST_ALLOWLIST: host.docker.internal
+      SRE_WORKSPACE_ID: ${SRE_WORKSPACE_ID:-default}
+      SRE_WORKSPACE_NAME: ${SRE_WORKSPACE_NAME:-Default workspace}
+      SRE_PLAN: ${SRE_PLAN:-trial}
+      SRE_MONTHLY_REQUEST_LIMIT: ${SRE_MONTHLY_REQUEST_LIMIT:-1000}
+      SRE_SUBSCRIPTION_STATUS: ${SRE_SUBSCRIPTION_STATUS:-trialing}
+      SRE_TRIAL_DAYS: ${SRE_TRIAL_DAYS:-14}
+      SRE_TRIAL_START_MODE: ${SRE_TRIAL_START_MODE:-deployment}
+      SRE_TRIAL_SELF_SERVICE_ENABLED: ${SRE_TRIAL_SELF_SERVICE_ENABLED:-false}
+      SRE_TRIAL_ACTIVATION_TOKEN: ${SRE_TRIAL_ACTIVATION_TOKEN:-}
+      SRE_UPGRADE_CONTACT_URL: ${SRE_UPGRADE_CONTACT_URL:-}
+      SRE_TRIAL_ENDS_AT: ${SRE_TRIAL_ENDS_AT:-}
+      SRE_CURRENT_PERIOD_END: ${SRE_CURRENT_PERIOD_END:-}
+      DATABASE_URL: postgresql://sre_agent:local-sre-agent-password@postgres:5432/sre_agent
+      SRE_CHANGE_EXECUTION_MODE: queued
+      SRE_CHANGE_EXECUTOR: simulation
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  change-worker:
+    build:
+      context: .
+    command: ["python", "-m", "backend.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "backend.worker", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 6
+    environment:
+      DATABASE_URL: postgresql://sre_agent:local-sre-agent-password@postgres:5432/sre_agent
+      SRE_WORKSPACE_ID: ${SRE_WORKSPACE_ID:-default}
+      SRE_WORKSPACE_NAME: ${SRE_WORKSPACE_NAME:-Default workspace}
+      SRE_PLAN: ${SRE_PLAN:-trial}
+      SRE_MONTHLY_REQUEST_LIMIT: ${SRE_MONTHLY_REQUEST_LIMIT:-1000}
+      SRE_SUBSCRIPTION_STATUS: ${SRE_SUBSCRIPTION_STATUS:-trialing}
+      SRE_TRIAL_DAYS: ${SRE_TRIAL_DAYS:-14}
+      SRE_TRIAL_START_MODE: ${SRE_TRIAL_START_MODE:-deployment}
+      SRE_TRIAL_ENDS_AT: ${SRE_TRIAL_ENDS_AT:-}
+      SRE_CURRENT_PERIOD_END: ${SRE_CURRENT_PERIOD_END:-}
+      SRE_CHANGE_EXECUTOR: simulation
+      SRE_CHANGE_JOB_MAX_ATTEMPTS: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

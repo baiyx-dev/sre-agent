@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from backend.security_auth import require_viewer
 
 from backend.tools.service_tool import (
     list_services,
@@ -7,7 +9,7 @@ from backend.tools.service_tool import (
 from backend.tools.metrics_tool import get_service_metrics
 from backend.tools.logs_tool import get_recent_logs
 
-router = APIRouter(prefix="/services", tags=["services"])
+router = APIRouter(prefix="/services", tags=["services"], dependencies=[Depends(require_viewer)])
 
 
 @router.get("/")

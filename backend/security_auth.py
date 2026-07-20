@@ -1,0 +1,242 @@
+import hmac
+import hashlib
+import os
+from dataclasses import dataclass
+from typing import Callable
+
+from fastapi import Header, HTTPException, Request
+from dotenv import load_dotenv
+
+from backend.services.commercial_service import (
+    authenticate_workspace_api_key,
+    count_active_workspace_api_keys,
+    get_subscription_status,
+    workspace_request_limit_reached,
+)
+from backend.storage.db import configured_workspace_id
+
+
+load_dotenv()
+
+
+_ROLE_LEVELS = {"viewer": 10, "operator": 20, "admin": 30}
+_PLACEHOLDER_API_KEYS = {
+    "change-me",
+    "replace-me",
+    "replace_with_a_long_random_secret",
+    "your-api-key-here",
+}
+
+
+def _subscription_recovery_path(request: Request) -> bool:
+    path = request.url.path
+    if path in {
+        "/auth/me",
+        "/workspace",
+        "/metrics",
+        "/internal/metrics",
+        "/internal/prometheus",
+    } or path.startswith("/billing/") or path.startswith("/trial/"):
+        return True
+    if path == "/workspace/api-keys" and request.method == "GET":
+        return True
+    return path.startswith("/workspace/api-keys/") and request.method == "DELETE"
+
+
+def _bootstrap_control_plane_path(request: Request) -> bool:
+    return _subscription_recovery_path(request) or request.url.path.startswith(
+        "/workspace/api-keys"
+    )
+
+
+def _enforce_subscription_access(request: Request, principal: "Principal") -> None:
+    if _subscription_recovery_path(request):
+        return
+    try:
+        subscription = get_subscription_status(principal.workspace_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="subscription state is unavailable",
+        ) from exc
+    if subscription["access_allowed"]:
+        return
+    raise HTTPException(
+        status_code=402,
+        detail={
+            "error": "subscription_inactive",
+            "plan": subscription["plan"],
+            "status": subscription["effective_status"],
+            "reason": subscription["blocking_reason"],
+            "trial_ends_at": subscription["trial_ends_at"],
+            "current_period_end": subscription["current_period_end"],
+        },
+    )
+
+
+@dataclass(frozen=True)
+class Principal:
+    subject: str
+    role: str
+    workspace_id: str
+    auth_source: str
+
+
+def is_auth_enabled() -> bool:
+    return os.getenv("SRE_AUTH_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configured_keys() -> list[tuple[str, str]]:
+    result = []
+    for role, env_name in (
+        ("viewer", "SRE_VIEWER_API_KEY"),
+        ("operator", "SRE_OPERATOR_API_KEY"),
+        ("admin", "SRE_ADMIN_API_KEY"),
+    ):
+        value = os.getenv(env_name, "").strip()
+        if value:
+            result.append((role, value))
+    return result
+
+
+def _strong_api_key(value: str | None) -> bool:
+    normalized = (value or "").strip()
+    return bool(
+        len(normalized) >= 32
+        and normalized.lower() not in _PLACEHOLDER_API_KEYS
+        and not normalized.lower().startswith("replace_with")
+    )
+
+
+def auth_configuration_status() -> dict:
+    configured_keys = _configured_keys()
+    configured_roles = [role for role, _ in configured_keys]
+    strong_admin_configured = any(
+        role == "admin" and _strong_api_key(value)
+        for role, value in configured_keys
+    )
+    try:
+        workspace_key_count = count_active_workspace_api_keys()
+    except Exception:
+        workspace_key_count = 0
+    return {
+        "enabled": is_auth_enabled(),
+        "configured": bool(configured_roles or workspace_key_count),
+        "configured_roles": configured_roles,
+        "strong_admin_configured": strong_admin_configured,
+        "workspace_key_count": workspace_key_count,
+    }
+
+
+def _extract_key(x_sre_api_key: str | None, authorization: str | None) -> str | None:
+    if x_sre_api_key:
+        return x_sre_api_key.strip()
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return None
+
+
+def require_role(required_role: str) -> Callable:
+    if required_role not in _ROLE_LEVELS:
+        raise ValueError(f"unknown role: {required_role}")
+
+    def dependency(
+        request: Request,
+        x_sre_api_key: str | None = Header(default=None, alias="X-SRE-API-Key"),
+        authorization: str | None = Header(default=None, alias="Authorization"),
+    ) -> Principal:
+        if not is_auth_enabled():
+            principal = Principal(
+                subject="local-demo",
+                role="admin",
+                workspace_id=configured_workspace_id(),
+                auth_source="local",
+            )
+            request.state.principal = principal
+            return principal
+
+        provided = _extract_key(x_sre_api_key, authorization)
+        if not provided:
+            raise HTTPException(
+                status_code=401,
+                detail="API key is required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        configured = _configured_keys()
+        try:
+            workspace_key_count = count_active_workspace_api_keys()
+        except Exception:
+            workspace_key_count = 0
+        if not configured and not workspace_key_count:
+            raise HTTPException(
+                status_code=503,
+                detail="authentication is enabled but no API keys are configured",
+            )
+
+        matched_roles = [role for role, expected in configured if hmac.compare_digest(provided, expected)]
+        if matched_roles:
+            role = max(matched_roles, key=lambda item: _ROLE_LEVELS[item])
+            key_fingerprint = hashlib.sha256(provided.encode("utf-8")).hexdigest()[:12]
+            principal = Principal(
+                subject=f"api-key:{role}:{key_fingerprint}",
+                role=role,
+                workspace_id=configured_workspace_id(),
+                auth_source="environment",
+            )
+            if (
+                os.getenv("SRE_ENVIRONMENT", "development").strip().lower()
+                == "production"
+                and workspace_key_count > 0
+                and not _bootstrap_control_plane_path(request)
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="bootstrap API keys are limited to account recovery in production; use a workspace API key",
+                )
+        else:
+            workspace_key = authenticate_workspace_api_key(provided)
+            if not workspace_key:
+                raise HTTPException(status_code=401, detail="invalid API key")
+            role = workspace_key["role"]
+            if request.url.path != "/auth/me" and not request.url.path.startswith(
+                "/billing/"
+            ) and workspace_request_limit_reached(
+                workspace_key["workspace_id"]
+            ):
+                raise HTTPException(
+                    status_code=429,
+                    detail="monthly workspace request limit reached",
+                    headers={"Retry-After": "3600"},
+                )
+            principal = Principal(
+                subject=f"workspace-key:{workspace_key['id']}",
+                role=role,
+                workspace_id=workspace_key["workspace_id"],
+                auth_source="workspace_api_key",
+            )
+        request.state.principal = principal
+        _enforce_subscription_access(request, principal)
+        if _ROLE_LEVELS[role] < _ROLE_LEVELS[required_role]:
+            raise HTTPException(status_code=403, detail=f"{required_role} role is required")
+        return principal
+
+    return dependency
+
+
+require_viewer = require_role("viewer")
+require_operator = require_role("operator")
+require_admin = require_role("admin")
+
+
+def principal_subject(principal: object) -> str:
+    """Return a trusted audit subject for injected principals and internal calls."""
+    if isinstance(principal, Principal):
+        return principal.subject
+    return "internal-call"
+
+
+def principal_workspace_id(principal: object) -> str:
+    if isinstance(principal, Principal):
+        return principal.workspace_id
+    return configured_workspace_id()

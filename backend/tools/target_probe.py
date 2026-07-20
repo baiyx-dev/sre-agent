@@ -1,28 +1,63 @@
 from datetime import datetime
+from time import perf_counter
 from urllib import error, request
 
-from backend.storage.repositories import get_monitored_target, list_monitored_targets
+from backend.storage.repositories import (
+    get_monitored_target,
+    list_monitored_targets,
+    record_monitored_target_verification,
+)
+from backend.security_network import UnsafeOutboundUrl, validate_outbound_url
 
 
 def _probe_target(url: str) -> tuple[str, float | None, str | None]:
+    try:
+        validate_outbound_url(url)
+    except UnsafeOutboundUrl:
+        return "down", None, "blocked_target"
     req = request.Request(url, headers={"Accept": "*/*"}, method="GET")
+    started_at = perf_counter()
     try:
         with request.urlopen(req, timeout=5) as resp:
             status_code = getattr(resp, "status", 200)
             latency_ms = float(resp.headers.get("X-Response-Time-Ms", 0) or 0)
             if latency_ms <= 0:
-                latency_ms = None
+                latency_ms = round((perf_counter() - started_at) * 1000, 2)
             # Reachable and not server error => running
             status = "running" if status_code < 500 else "degraded"
             return status, latency_ms, None
     except error.HTTPError as e:
+        latency_ms = round((perf_counter() - started_at) * 1000, 2)
         if e.code < 500:
-            return "running", None, f"http_{e.code}"
-        return "degraded", None, f"http_{e.code}"
+            return "running", latency_ms, f"http_{e.code}"
+        return "degraded", latency_ms, f"http_{e.code}"
     except error.URLError:
         return "down", None, "connection_error"
     except TimeoutError:
         return "down", None, "timeout"
+
+
+def verify_monitored_target(name: str) -> dict | None:
+    target = get_monitored_target(name)
+    if not target:
+        return None
+    status, latency_ms, probe_error = _probe_target(target["base_url"])
+    updated = record_monitored_target_verification(
+        name,
+        status=status,
+        probe_error=probe_error,
+        latency_ms=latency_ms,
+    )
+    if not updated:
+        return None
+    return {
+        "connected": status in {"running", "degraded"},
+        "status": status,
+        "probe_error": probe_error,
+        "latency_ms": latency_ms,
+        "verified_at": updated["last_verified_at"],
+        "target": updated,
+    }
 
 
 def _service_from_target(target: dict) -> dict:

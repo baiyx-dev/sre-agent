@@ -1,14 +1,14 @@
 from backend.agents.intent_router import detect_intent, extract_entities
 from backend.tools.alert_tool import get_recent_alerts
-from backend.tools.deploy_tool import deploy_service
-from backend.tools.logs_tool import get_recent_logs
-from backend.tools.metrics_tool import get_service_metrics
-from backend.tools.rollback_tool import rollback_service
 from backend.tools.service_tool import get_service_status, list_services
-from backend.tools.external_data_source import get_external_k8s_observability
 from backend.llm.provider import generate_final_answer, generate_troubleshoot_assessment
 from backend.storage.repositories import get_recent_deploy_context
 from backend.services.policy_service import evaluate_action_policy, build_execution_preview
+from backend.executors.change_executor import (
+    ChangeExecutorConfigurationError,
+    get_change_executor,
+)
+from backend.analyzers.service_health import ServiceHealthAnalyzer
 
 
 def _load_pending_json_list(session_context: dict | None, key: str) -> list[str]:
@@ -419,39 +419,43 @@ def run_agent(
             "result": current
         })
 
-        deploy_result = deploy_service(service_name, version)
+        policy_decision = evaluate_action_policy("deploy", service_name, target_version=version)
         steps.append({
             "step": 2,
-            "action": "deploy_service",
-            "result": deploy_result
+            "action": "evaluate_action_policy",
+            "result": policy_decision,
         })
 
-        latest = get_service_status(service_name)
-        steps.append({
-            "step": 3,
-            "action": "get_service_status",
-            "result": latest
-        })
-
-        if latest["status"] == "running":
-            final_answer = (
-                f"{service_name} 已部署到 {version}，当前状态为 running。"
-                f" 原版本是 {current['version']}，当前错误率 {latest['error_rate']}%。"
-            )
-        else:
-            final_answer = (
-                f"{service_name} 已尝试部署到 {version}，但当前状态为 {latest['status']}。"
-                f" 错误率为 {latest['error_rate']}%，建议继续排查或回滚。"
-            )
-
-        final_answer, generation_meta = _summarize_with_llm(message, intent, steps, final_answer)
+        if not policy_decision.get("allowed"):
+            return {
+                "intent": intent,
+                "steps": steps,
+                "final_answer": policy_decision["summary"],
+                "resolved_entities": _resolved_entities_payload(intent, entities, resolved_from_session),
+                "policy_decision": policy_decision,
+                "execution_mode": "denied",
+                "requires_confirmation": False,
+                "pending_action": None,
+            }
 
         return {
             "intent": intent,
             "steps": steps,
-            "final_answer": final_answer,
+            "final_answer": (
+                f"准备部署 {service_name} 到 {version}。"
+                f" {policy_decision['summary']} 请确认后再执行。"
+            ),
             "resolved_entities": _resolved_entities_payload(intent, entities, resolved_from_session),
-            **generation_meta,
+            "policy_decision": policy_decision,
+            "execution_mode": "pending_confirmation",
+            "requires_confirmation": True,
+            "pending_action": {
+                "action_type": "deploy",
+                "service_name": service_name,
+                "target_version": version,
+                "policy_decision": policy_decision,
+                "resolved_entities": _resolved_entities_payload(intent, entities, resolved_from_session),
+            },
         }
 
     if intent == "rollback":
@@ -488,6 +492,18 @@ def run_agent(
             "result": policy_decision,
         })
 
+        if not policy_decision.get("allowed"):
+            return {
+                "intent": intent,
+                "steps": steps,
+                "final_answer": policy_decision["summary"],
+                "resolved_entities": _resolved_entities_payload(intent, entities, resolved_from_session),
+                "policy_decision": policy_decision,
+                "execution_mode": "denied",
+                "requires_confirmation": False,
+                "pending_action": None,
+            }
+
         return {
             "intent": intent,
             "steps": steps,
@@ -498,7 +514,7 @@ def run_agent(
             "resolved_entities": _resolved_entities_payload(intent, entities, resolved_from_session),
             "policy_decision": policy_decision,
             "execution_mode": "pending_confirmation",
-            "requires_confirmation": policy_decision.get("requires_confirmation", True),
+            "requires_confirmation": True,
             "pending_action": {
                 "action_type": "rollback",
                 "service_name": service_name,
@@ -533,50 +549,26 @@ def run_agent(
             service_name = alerts[0]["service"]
             entities["service_name"] = service_name
 
-        alerts = get_recent_alerts(service_name=service_name, limit=5)
-        steps.append({
-            "step": 1,
-            "action": "get_recent_alerts",
-            "result": alerts
-        })
-
-        status = get_service_status(service_name)
-        steps.append({
-            "step": 2,
-            "action": "get_service_status",
-            "result": status
-        })
-
-        metrics = get_service_metrics(service_name)
-        steps.append({
-            "step": 3,
-            "action": "get_service_metrics",
-            "result": metrics
-        })
-
-        logs = get_recent_logs(service_name, limit=5)
-        steps.append({
-            "step": 4,
-            "action": "get_recent_logs",
-            "result": logs
-        })
-
-        recent_changes = get_recent_deploy_context(service_name, limit=3)
-        steps.append({
-            "step": 5,
-            "action": "get_recent_deploy_context",
-            "result": recent_changes
-        })
-
-        k8s_observability = get_external_k8s_observability(
+        analyzer_result = ServiceHealthAnalyzer().run(
             service_name,
             namespace=entities.get("namespace"),
         )
-        steps.append({
-            "step": 6,
-            "action": "get_k8s_observability",
-            "result": k8s_observability or {},
-        })
+        evidence = analyzer_result.evidence
+        steps.extend(analyzer_result.steps)
+        alerts = evidence["alerts"] if isinstance(evidence["alerts"], list) else []
+        status = evidence["status"] if isinstance(evidence["status"], dict) else {}
+        metrics = evidence["metrics"] if isinstance(evidence["metrics"], dict) else {}
+        logs = evidence["logs"] if isinstance(evidence["logs"], list) else []
+        recent_changes = (
+            evidence["recent_changes"]
+            if isinstance(evidence["recent_changes"], list)
+            else []
+        )
+        k8s_observability = (
+            evidence["k8s_observability"]
+            if isinstance(evidence["k8s_observability"], dict)
+            else {}
+        )
 
         fallback_assessment = _build_fallback_troubleshoot_assessment(
             service_name=service_name,
@@ -676,10 +668,11 @@ def run_agent(
 def execute_confirmed_action(pending_action: dict) -> dict:
     action_type = pending_action.get("action_type")
     service_name = pending_action.get("service_name")
+    target_version = pending_action.get("target_version")
     dry_run = bool(pending_action.get("dry_run"))
     steps = []
 
-    if action_type != "rollback":
+    if action_type not in {"deploy", "rollback"}:
         return {
             "intent": "unknown",
             "steps": [],
@@ -690,10 +683,20 @@ def execute_confirmed_action(pending_action: dict) -> dict:
 
     if not service_name:
         return {
-            "intent": "rollback",
+            "intent": action_type or "unknown",
             "steps": [],
-            "final_answer": "待确认操作缺少服务名，无法执行回滚。",
+            "final_answer": "待确认操作缺少服务名，无法执行。",
             "execution_mode": "dry_run" if dry_run else "execute",
+            "requires_confirmation": False,
+            "pending_action": None,
+        }
+
+    if action_type == "deploy" and not target_version:
+        return {
+            "intent": action_type,
+            "steps": [],
+            "final_answer": "待确认部署缺少目标版本，无法执行。",
+            "execution_mode": "denied",
             "requires_confirmation": False,
             "pending_action": None,
         }
@@ -701,7 +704,7 @@ def execute_confirmed_action(pending_action: dict) -> dict:
     current = get_service_status(service_name)
     if not current:
         return {
-            "intent": "rollback",
+            "intent": action_type,
             "steps": [],
             "final_answer": f"没有找到服务 {service_name}。",
             "execution_mode": "dry_run" if dry_run else "execute",
@@ -715,7 +718,7 @@ def execute_confirmed_action(pending_action: dict) -> dict:
         "result": current
     })
 
-    policy_decision = evaluate_action_policy(action_type, service_name)
+    policy_decision = evaluate_action_policy(action_type, service_name, target_version=target_version)
     steps.append({
         "step": 2,
         "action": "evaluate_action_policy",
@@ -724,7 +727,7 @@ def execute_confirmed_action(pending_action: dict) -> dict:
 
     if not policy_decision.get("allowed"):
         return {
-            "intent": "rollback",
+            "intent": action_type,
             "steps": steps,
             "final_answer": policy_decision["summary"],
             "policy_decision": policy_decision,
@@ -734,14 +737,14 @@ def execute_confirmed_action(pending_action: dict) -> dict:
         }
 
     if dry_run:
-        preview = build_execution_preview(action_type, service_name)
+        preview = build_execution_preview(action_type, service_name, target_version=target_version)
         steps.append({
             "step": 3,
             "action": "build_execution_preview",
             "result": preview,
         })
         return {
-            "intent": "rollback",
+            "intent": action_type,
             "steps": steps,
             "final_answer": (
                 f"已完成 dry-run。{preview['message']}"
@@ -753,29 +756,61 @@ def execute_confirmed_action(pending_action: dict) -> dict:
             "pending_action": None,
         }
 
-    rollback_result = rollback_service(service_name)
+    try:
+        executor = get_change_executor()
+        action_result = executor.execute(pending_action)
+    except ChangeExecutorConfigurationError as exc:
+        action_result = {
+            "success": False,
+            "verified": False,
+            "executor": "unconfigured",
+            "message": str(exc),
+        }
+    action_name = f"execute_change:{action_result.get('executor', 'unknown')}"
     steps.append({
         "step": 3,
-        "action": "rollback_service",
-        "result": rollback_result
+        "action": action_name,
+        "result": action_result,
     })
 
-    latest = get_service_status(service_name)
+    if not action_result.get("success"):
+        return {
+            "intent": action_type,
+            "steps": steps,
+            "final_answer": action_result.get("message", "变更执行失败。"),
+            "policy_decision": policy_decision,
+            "execution_mode": "failed",
+            "requires_confirmation": False,
+            "pending_action": None,
+        }
+
+    latest = action_result.get("observed_state") or get_service_status(service_name)
     steps.append({
         "step": 4,
         "action": "get_service_status",
         "result": latest
     })
 
-    final_answer = (
-        f"{service_name} 已完成回滚，当前版本为 {latest['version']}，"
-        f"状态为 {latest['status']}，当前错误率 {latest['error_rate']}%。"
+    if action_type == "deploy":
+        final_answer = (
+            f"{service_name} 已完成部署并通过执行器验证，当前版本为 {latest.get('version', target_version)}，"
+            f"状态为 {latest.get('status', 'unknown')}，当前错误率 {latest.get('error_rate', 'unknown')}%。"
+        )
+    else:
+        final_answer = (
+            f"{service_name} 已完成回滚并通过执行器验证，当前版本为 {latest.get('version', 'unknown')}，"
+            f"状态为 {latest.get('status', 'unknown')}，当前错误率 {latest.get('error_rate', 'unknown')}%。"
+        )
+
+    final_answer, generation_meta = _summarize_with_llm(
+        f"确认执行{action_type} {service_name}",
+        action_type,
+        steps,
+        final_answer,
     )
 
-    final_answer, generation_meta = _summarize_with_llm(f"确认执行回滚 {service_name}", "rollback", steps, final_answer)
-
     return {
-        "intent": "rollback",
+        "intent": action_type,
         "steps": steps,
         "final_answer": final_answer,
         "policy_decision": policy_decision,

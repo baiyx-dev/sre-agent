@@ -1,4 +1,6 @@
 .env
+.env.*.local
+.trial-deliveries/
 .venv/
 .idea/
 __pycache__/
@@ -6,4 +8,10 @@ __pycache__/
 *.pyo
 *.pyd
 .DS_Store
-sre_agent.db
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+.coverage
+htmlcov/

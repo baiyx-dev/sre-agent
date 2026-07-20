@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import os
 
 from backend.storage.db import get_conn
 
@@ -92,7 +93,20 @@ def _insert_seed_rows(cur, now: datetime):
     )
 
 
+def demo_seed_enabled() -> bool:
+    environment = os.getenv("SRE_ENVIRONMENT", "development").strip().lower()
+    default = "false" if environment == "production" else "true"
+    return os.getenv("SRE_SEED_DEMO_DATA", default).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def seed_data():
+    if not demo_seed_enabled():
+        return None
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT COUNT(*) AS count FROM services")
@@ -112,7 +126,20 @@ def seed_data():
 def reset_seed_data():
     conn = get_conn()
     cur = conn.cursor()
-    for table in ("services", "alerts", "logs", "deployments", "task_steps", "task_runs", "execution_audits"):
+    for table in (
+        "services",
+        "alerts",
+        "logs",
+        "deployments",
+        "task_steps",
+        "task_runs",
+        "execution_audits",
+        "change_jobs",
+        "change_requests",
+        "incident_events",
+        "incident_alerts",
+        "incidents",
+    ):
         cur.execute(f"DELETE FROM {table}")
     now = datetime.now()
     _insert_seed_rows(cur, now)

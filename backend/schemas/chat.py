@@ -9,7 +9,8 @@ class ChatRequest(BaseModel):
 
 
 class ConfirmActionRequest(BaseModel):
-    pending_action: dict
+    change_request_id: str | None = None
+    pending_action: dict | None = None
     session_id: str | None = None
     dry_run: bool = False
 
@@ -26,6 +27,7 @@ class ChatResponse(BaseModel):
     execution_mode: str | None = None
     requires_confirmation: bool = False
     pending_action: dict | None = None
+    change_request_id: str | None = None
     generation_source: str = "fallback_rule"
     llm_provider: str = "deepseek"
     used_fallback: bool = True

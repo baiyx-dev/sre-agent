@@ -1,8 +1,16 @@
 import json
 from urllib import error, request
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from backend.security_network import UnsafeOutboundUrl, validate_outbound_url
+from backend.security_auth import require_admin
+from backend.security_secrets import (
+    get_runtime_secret,
+    persist_runtime_secret,
+    secret_storage_mode,
+)
 
 from backend.storage.repositories import (
     delete_monitored_target,
@@ -11,8 +19,20 @@ from backend.storage.repositories import (
     set_app_setting,
     upsert_monitored_target,
 )
+from backend.tools.target_probe import verify_monitored_target
 
-router = APIRouter(prefix="/settings", tags=["settings"])
+router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(require_admin)])
+
+
+def _secret_is_configured(key: str) -> bool:
+    return bool(get_runtime_secret(key))
+
+
+def _persist_secret(key: str, value: str | None) -> None:
+    try:
+        persist_runtime_secret(key, value)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 class DataSourceConfigRequest(BaseModel):
@@ -62,21 +82,24 @@ def _normalize_url(value: str | None) -> str | None:
     raw = (value or "").strip()
     if not raw:
         return None
-    if raw.startswith("http://") or raw.startswith("https://"):
-        return raw
-    return f"http://{raw}"
+    normalized = raw if raw.startswith("http://") or raw.startswith("https://") else f"http://{raw}"
+    try:
+        return validate_outbound_url(normalized)
+    except UnsafeOutboundUrl as exc:
+        raise HTTPException(status_code=400, detail=f"unsafe outbound URL: {exc}") from exc
 
 
 @router.get("/data-source")
 def get_data_source_config():
     return {
+        "secret_storage_mode": secret_storage_mode(),
         "sre_data_api_base": get_app_setting("SRE_DATA_API_BASE"),
-        "sre_data_api_token": get_app_setting("SRE_DATA_API_TOKEN"),
+        "sre_data_api_token_configured": _secret_is_configured("SRE_DATA_API_TOKEN"),
         "prometheus_base_url": get_app_setting("PROMETHEUS_BASE_URL"),
-        "prometheus_token": get_app_setting("PROMETHEUS_TOKEN"),
+        "prometheus_token_configured": _secret_is_configured("PROMETHEUS_TOKEN"),
         "prometheus_service_label": get_app_setting("PROMETHEUS_SERVICE_LABEL"),
         "loki_base_url": get_app_setting("LOKI_BASE_URL"),
-        "loki_token": get_app_setting("LOKI_TOKEN"),
+        "loki_token_configured": _secret_is_configured("LOKI_TOKEN"),
         "loki_service_label": get_app_setting("LOKI_SERVICE_LABEL"),
         "prom_query_up": get_app_setting("PROM_QUERY_UP"),
         "prom_query_replicas": get_app_setting("PROM_QUERY_REPLICAS"),
@@ -91,7 +114,7 @@ def get_data_source_config():
 
 @router.put("/data-source")
 def update_data_source_config(req: DataSourceConfigRequest):
-    payload = req.dict(exclude_unset=True)
+    payload = req.model_dump(exclude_unset=True)
 
     if "sre_data_api_base" in payload:
         base_value = _normalize_url(payload.get("sre_data_api_base"))
@@ -101,13 +124,13 @@ def update_data_source_config(req: DataSourceConfigRequest):
 
     if "sre_data_api_token" in payload:
         token_value = (payload.get("sre_data_api_token") or "").strip() or None
-        set_app_setting("SRE_DATA_API_TOKEN", token_value)
+        _persist_secret("SRE_DATA_API_TOKEN", token_value)
 
     if "prometheus_base_url" in payload:
         set_app_setting("PROMETHEUS_BASE_URL", _normalize_url(payload.get("prometheus_base_url")))
 
     if "prometheus_token" in payload:
-        set_app_setting("PROMETHEUS_TOKEN", (payload.get("prometheus_token") or "").strip() or None)
+        _persist_secret("PROMETHEUS_TOKEN", (payload.get("prometheus_token") or "").strip() or None)
 
     if "prometheus_service_label" in payload:
         set_app_setting("PROMETHEUS_SERVICE_LABEL", (payload.get("prometheus_service_label") or "").strip() or None)
@@ -116,7 +139,7 @@ def update_data_source_config(req: DataSourceConfigRequest):
         set_app_setting("LOKI_BASE_URL", _normalize_url(payload.get("loki_base_url")))
 
     if "loki_token" in payload:
-        set_app_setting("LOKI_TOKEN", (payload.get("loki_token") or "").strip() or None)
+        _persist_secret("LOKI_TOKEN", (payload.get("loki_token") or "").strip() or None)
 
     if "loki_service_label" in payload:
         set_app_setting("LOKI_SERVICE_LABEL", (payload.get("loki_service_label") or "").strip() or None)
@@ -136,13 +159,14 @@ def update_data_source_config(req: DataSourceConfigRequest):
 
     return {
         "ok": True,
+        "secret_storage_mode": secret_storage_mode(),
         "sre_data_api_base": get_app_setting("SRE_DATA_API_BASE"),
-        "sre_data_api_token": get_app_setting("SRE_DATA_API_TOKEN"),
+        "sre_data_api_token_configured": _secret_is_configured("SRE_DATA_API_TOKEN"),
         "prometheus_base_url": get_app_setting("PROMETHEUS_BASE_URL"),
-        "prometheus_token": get_app_setting("PROMETHEUS_TOKEN"),
+        "prometheus_token_configured": _secret_is_configured("PROMETHEUS_TOKEN"),
         "prometheus_service_label": get_app_setting("PROMETHEUS_SERVICE_LABEL"),
         "loki_base_url": get_app_setting("LOKI_BASE_URL"),
-        "loki_token": get_app_setting("LOKI_TOKEN"),
+        "loki_token_configured": _secret_is_configured("LOKI_TOKEN"),
         "loki_service_label": get_app_setting("LOKI_SERVICE_LABEL"),
         "prom_query_up": get_app_setting("PROM_QUERY_UP"),
         "prom_query_replicas": get_app_setting("PROM_QUERY_REPLICAS"),
@@ -286,12 +310,12 @@ def _probe_loki(base_url: str | None, token: str | None):
 @router.post("/data-source/test")
 def test_data_source(req: DataSourceTestRequest):
     base_value = _normalize_url(req.sre_data_api_base if req.sre_data_api_base is not None else get_app_setting("SRE_DATA_API_BASE")) or ""
-    token_value = (req.sre_data_api_token if req.sre_data_api_token is not None else get_app_setting("SRE_DATA_API_TOKEN") or "").strip() or None
+    token_value = (req.sre_data_api_token if req.sre_data_api_token is not None else get_runtime_secret("SRE_DATA_API_TOKEN") or "").strip() or None
     prometheus_base = _normalize_url(req.prometheus_base_url if hasattr(req, "prometheus_base_url") and req.prometheus_base_url is not None else get_app_setting("PROMETHEUS_BASE_URL")) or ""
-    prometheus_token = (getattr(req, "prometheus_token", None) if hasattr(req, "prometheus_token") and getattr(req, "prometheus_token") is not None else get_app_setting("PROMETHEUS_TOKEN") or "").strip() or None
+    prometheus_token = (getattr(req, "prometheus_token", None) if hasattr(req, "prometheus_token") and getattr(req, "prometheus_token") is not None else get_runtime_secret("PROMETHEUS_TOKEN") or "").strip() or None
     prometheus_label = (getattr(req, "prometheus_service_label", None) if hasattr(req, "prometheus_service_label") and getattr(req, "prometheus_service_label") is not None else get_app_setting("PROMETHEUS_SERVICE_LABEL") or "service").strip() or "service"
     loki_base = _normalize_url(getattr(req, "loki_base_url", None) if hasattr(req, "loki_base_url") and getattr(req, "loki_base_url") is not None else get_app_setting("LOKI_BASE_URL")) or ""
-    loki_token = (getattr(req, "loki_token", None) if hasattr(req, "loki_token") and getattr(req, "loki_token") is not None else get_app_setting("LOKI_TOKEN") or "").strip() or None
+    loki_token = (getattr(req, "loki_token", None) if hasattr(req, "loki_token") and getattr(req, "loki_token") is not None else get_runtime_secret("LOKI_TOKEN") or "").strip() or None
 
     probes = {}
     if base_value:
@@ -326,8 +350,35 @@ def create_or_update_target(req: MonitoredTargetRequest):
         raise HTTPException(status_code=400, detail="target name is required")
     if not (base_url.startswith("http://") or base_url.startswith("https://")):
         raise HTTPException(status_code=400, detail="target base_url must start with http:// or https://")
-    saved = upsert_monitored_target(name=name, base_url=base_url)
-    return {"ok": True, "target": saved}
+    upsert_monitored_target(name=name, base_url=base_url)
+    verification = verify_monitored_target(name)
+    if not verification:
+        raise HTTPException(status_code=404, detail="target was not found after it was saved")
+    return {
+        "ok": True,
+        "connected": verification["connected"],
+        "target": verification["target"],
+        "verification": {
+            key: verification[key]
+            for key in ("connected", "status", "probe_error", "latency_ms", "verified_at")
+        },
+    }
+
+
+@router.post("/targets/{name}/verify")
+def verify_target(name: str):
+    verification = verify_monitored_target(name)
+    if not verification:
+        raise HTTPException(status_code=404, detail="target not found")
+    return {
+        "ok": True,
+        "connected": verification["connected"],
+        "target": verification["target"],
+        "verification": {
+            key: verification[key]
+            for key in ("connected", "status", "probe_error", "latency_ms", "verified_at")
+        },
+    }
 
 
 @router.delete("/targets/{name}")

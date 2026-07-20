@@ -1,5 +1,6 @@
-fastapi
-uvicorn
-pydantic
-python-dotenv
-httpx
+fastapi==0.139.2
+uvicorn==0.51.0
+pydantic==2.13.4
+python-dotenv==1.2.2
+httpx==0.28.1
+psycopg[binary]==3.3.4
