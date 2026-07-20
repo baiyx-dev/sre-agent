@@ -9,14 +9,31 @@ from datetime import datetime, timezone
 from backend.logging_config import configure_logging
 from backend.services.change_worker_service import process_next_change_job
 from backend.storage.db import init_db
-from backend.storage.repositories import touch_worker_heartbeat
+from backend.storage.repositories import touch_worker_heartbeat, worker_heartbeat_status
+
+
+def worker_healthcheck() -> bool:
+    """Return whether this deployment has a fresh, active worker heartbeat."""
+    try:
+        return bool(worker_heartbeat_status()["healthy"])
+    except Exception:
+        logging.getLogger("sre-agent.worker").exception("worker_healthcheck_failed")
+        return False
 
 
 def main() -> None:
     configure_logging()
     parser = argparse.ArgumentParser(description="SRE Agent durable change worker")
     parser.add_argument("--once", action="store_true", help="Process at most one available job")
+    parser.add_argument(
+        "--healthcheck",
+        action="store_true",
+        help="Exit successfully when a fresh worker heartbeat is present",
+    )
     args = parser.parse_args()
+
+    if args.healthcheck:
+        raise SystemExit(0 if worker_healthcheck() else 1)
 
     init_db()
     worker_id = os.getenv("SRE_CHANGE_WORKER_ID", "").strip() or (

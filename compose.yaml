@@ -48,6 +48,12 @@ services:
     build:
       context: .
     command: ["python", "-m", "backend.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "backend.worker", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 6
     environment:
       DATABASE_URL: postgresql://sre_agent:local-sre-agent-password@postgres:5432/sre_agent
       SRE_WORKSPACE_ID: ${SRE_WORKSPACE_ID:-default}
