@@ -8,6 +8,14 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from backend.security_auth import Principal, principal_subject, require_admin, require_viewer
+from backend.services.billing_statement_service import (
+    BillingStatementConflict,
+    BillingStatementError,
+    finalize_billing_statement,
+    get_billing_statement,
+    list_billing_statements,
+    preview_billing_statement,
+)
 from backend.services.commercial_service import (
     PlanEntitlementError,
     get_plan_entitlements,
@@ -54,6 +62,11 @@ class PilotOutcomeCreateRequest(BaseModel):
     successful: bool | None = None
     notes: str | None = Field(default=None, max_length=2000)
     occurred_at: str | None = Field(default=None, max_length=50)
+
+
+class BillingStatementFinalizeRequest(BaseModel):
+    month: str = Field(min_length=7, max_length=7)
+    idempotency_key: str = Field(min_length=1, max_length=120)
 
 
 @router.get("/workspace")
@@ -181,6 +194,171 @@ def billing_usage_csv(month: str | None = None, principal: Principal = Depends(r
     )
 
 
+@router.get("/billing/statements/preview")
+def billing_statement_preview(
+    month: str,
+    principal: Principal = Depends(require_admin),
+):
+    try:
+        return preview_billing_statement(
+            workspace_id=principal.workspace_id,
+            month=month,
+        )
+    except BillingStatementError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/billing/statements/finalize", status_code=201)
+def billing_statement_finalize(
+    req: BillingStatementFinalizeRequest,
+    principal: Principal = Depends(require_admin),
+):
+    try:
+        statement, created = finalize_billing_statement(
+            workspace_id=principal.workspace_id,
+            month=req.month,
+            idempotency_key=req.idempotency_key,
+            finalized_by=principal_subject(principal),
+        )
+    except BillingStatementConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BillingStatementError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "statement": statement,
+        "created": created,
+        "idempotent_replay": not created,
+    }
+
+
+@router.get("/billing/statements")
+def billing_statement_list(
+    limit: int = 100,
+    principal: Principal = Depends(require_admin),
+):
+    try:
+        return list_billing_statements(
+            workspace_id=principal.workspace_id,
+            limit=limit,
+        )
+    except BillingStatementError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/billing/statements/{month}")
+def billing_statement_detail(
+    month: str,
+    principal: Principal = Depends(require_admin),
+):
+    try:
+        statement = get_billing_statement(
+            workspace_id=principal.workspace_id,
+            month=month,
+        )
+    except BillingStatementError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not statement:
+        raise HTTPException(status_code=404, detail="billing statement not found")
+    return {"statement": statement}
+
+
+@router.get("/billing/statements/{month}/verify")
+def billing_statement_verify(
+    month: str,
+    principal: Principal = Depends(require_admin),
+):
+    result = billing_statement_detail(month, principal)
+    statement = result["statement"]
+    return {
+        "workspace_id": principal.workspace_id,
+        "month": month,
+        "statement_id": statement["id"],
+        **statement["integrity"],
+    }
+
+
+@router.get("/billing/statements/{month}/export.csv")
+def billing_statement_export_csv(
+    month: str,
+    principal: Principal = Depends(require_admin),
+):
+    result = billing_statement_detail(month, principal)
+    statement = result["statement"]
+    if not statement["integrity"]["valid"]:
+        raise HTTPException(
+            status_code=409,
+            detail="billing statement failed integrity verification",
+        )
+    payload = statement.get("payload") or {}
+    workspace = payload.get("workspace") or {}
+    usage = payload.get("usage") or {}
+    pricing = payload.get("pricing") or {}
+    internal_cost = payload.get("internal_cost") or {}
+    output = io.StringIO()
+    writer = csv.writer(output, lineterminator="\n")
+    columns = [
+        "statement_id",
+        "workspace_id",
+        "workspace_name",
+        "month",
+        "period_start",
+        "period_end",
+        "plan",
+        "subscription_status",
+        "requests_used",
+        "included_requests",
+        "overage_requests",
+        "base_fee_usd",
+        "overage_rate_usd_per_1000_requests",
+        "overage_fee_usd",
+        "amount_due_usd",
+        "llm_cost_usd",
+        "payload_hash",
+        "integrity_valid",
+        "finalized_at",
+        "finalized_by",
+        "usage_json",
+    ]
+    writer.writerow(columns)
+    writer.writerow(
+        [
+            statement["id"],
+            statement["workspace_id"],
+            workspace.get("name") or "",
+            statement["month"],
+            payload.get("period_start") or "",
+            payload.get("period_end") or "",
+            workspace.get("plan") or "",
+            workspace.get("subscription_status") or "",
+            usage.get("requests_used", 0),
+            usage.get("included_requests", 0),
+            usage.get("overage_requests", 0),
+            pricing.get("base_fee_usd", 0),
+            pricing.get("overage_rate_usd_per_1000_requests", 0),
+            pricing.get("overage_fee_usd", 0),
+            pricing.get("amount_due_usd", 0),
+            internal_cost.get("llm_cost_usd", 0),
+            statement["payload_hash"],
+            str(statement["integrity"]["valid"]).lower(),
+            payload.get("finalized_at") or statement["created_at"],
+            statement["finalized_by"],
+            json.dumps(usage.get("by_metric") or {}, ensure_ascii=False, separators=(",", ":")),
+        ]
+    )
+    safe_workspace = re.sub(r"[^a-zA-Z0-9_-]", "-", statement["workspace_id"])
+    return Response(
+        content="\ufeff" + output.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="sre-statement-{safe_workspace}-{month}.csv"'
+            ),
+            "X-Billing-Statement-Hash": statement["payload_hash"],
+            "X-Billing-Statement-Integrity": str(
+                statement["integrity"]["valid"]
+            ).lower(),
+        },
+    )
 @router.post("/billing/pilot-outcomes", status_code=201)
 def pilot_outcome_create(
     req: PilotOutcomeCreateRequest,

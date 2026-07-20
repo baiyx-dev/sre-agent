@@ -70,6 +70,7 @@ SRE_PRODUCTION_WRITE_ENABLED=false
 11. 重放同一个 `/billing/pilot-outcomes` 幂等键不会重复计数，修改载荷重放返回 409。
 12. `/billing/value-report` 与 CSV 中的节省时间、支持工时、模型成本和毛利可从原始证据复算。
 13. `/billing/subscription` 显示合同对应状态；试用到期后业务 API 返回 402，而账单、价值报告和监控仍可导出。
+14. 已结束月份能够预览并幂等定稿；迟到用量不改变已定稿账单，`/verify` 返回 `valid=true`，CSV 与 JSON 金额一致。
 
 ## 5. 价值与单位经济性
 

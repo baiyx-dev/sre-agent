@@ -126,6 +126,7 @@ class RegressionTests(unittest.TestCase):
         os.environ.pop("SRE_CHANGE_EXECUTION_MODE", None)
         os.environ.pop("SRE_CHANGE_JOB_MAX_ATTEMPTS", None)
         os.environ.pop("SRE_PLAN_PRICE_USD_MONTHLY", None)
+        os.environ.pop("SRE_REQUEST_OVERAGE_USD_PER_1000", None)
         os.environ.pop("SRE_INFRA_COST_USD_MONTHLY", None)
         os.environ.pop("SRE_CUSTOMER_HOURLY_COST_USD", None)
         os.environ.pop("SRE_SUPPORT_HOURLY_COST_USD", None)
@@ -217,6 +218,9 @@ class RegressionTests(unittest.TestCase):
     @unittest.skipIf(is_postgres_database(), "isolated SQLite path is used for retention test")
     def test_retention_is_dry_run_by_default_and_requires_exact_confirmation(self):
         previous_path = os.environ.get("SRE_AGENT_DB_PATH")
+        previous_billing_guard = os.environ.get(
+            "SRE_REQUIRE_FINALIZED_BILLING_BEFORE_USAGE_PURGE"
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             os.environ["SRE_AGENT_DB_PATH"] = str(Path(temp_dir) / "retention.sqlite3")
             try:
@@ -249,6 +253,21 @@ class RegressionTests(unittest.TestCase):
                 with self.assertRaises(PermissionError):
                     purge_retained_data(confirmation="PURGE:wrong", now=now)
 
+                os.environ[
+                    "SRE_REQUIRE_FINALIZED_BILLING_BEFORE_USAGE_PURGE"
+                ] = "true"
+                guarded = retention_preview(now)
+                self.assertTrue(guarded["billing_statement_guard"]["blocked"])
+                self.assertIn(
+                    "2000-01",
+                    guarded["billing_statement_guard"]["unfinalized_usage_months"],
+                )
+                with self.assertRaises(RuntimeError):
+                    purge_retained_data(confirmation="PURGE:default", now=now)
+                os.environ[
+                    "SRE_REQUIRE_FINALIZED_BILLING_BEFORE_USAGE_PURGE"
+                ] = "false"
+
                 applied = purge_retained_data(confirmation="PURGE:default", now=now)
                 self.assertEqual(applied["mode"], "applied")
                 self.assertEqual(applied["deleted"]["logs"], 1)
@@ -260,6 +279,15 @@ class RegressionTests(unittest.TestCase):
                     os.environ.pop("SRE_AGENT_DB_PATH", None)
                 else:
                     os.environ["SRE_AGENT_DB_PATH"] = previous_path
+                if previous_billing_guard is None:
+                    os.environ.pop(
+                        "SRE_REQUIRE_FINALIZED_BILLING_BEFORE_USAGE_PURGE",
+                        None,
+                    )
+                else:
+                    os.environ[
+                        "SRE_REQUIRE_FINALIZED_BILLING_BEFORE_USAGE_PURGE"
+                    ] = previous_billing_guard
 
     def test_postgres_sql_compatibility_translation(self):
         self.assertEqual(_postgres_sql("BEGIN IMMEDIATE"), "BEGIN")
@@ -928,6 +956,295 @@ class RegressionTests(unittest.TestCase):
             os.environ.pop("SRE_INFRA_COST_USD_MONTHLY", None)
             os.environ.pop("SRE_CUSTOMER_HOURLY_COST_USD", None)
             os.environ.pop("SRE_SUPPORT_HOURLY_COST_USD", None)
+
+    def test_billing_statement_freezes_closed_month_and_detects_tampering(self):
+        month = "2000-02"
+        usage_request_ids = (
+            "billing-statement-regression-api",
+            "billing-statement-regression-llm",
+            "billing-statement-regression-late",
+        )
+        tracked_env = {
+            name: os.environ.get(name)
+            for name in (
+                "SRE_PLAN",
+                "SRE_SUBSCRIPTION_STATUS",
+                "SRE_MONTHLY_REQUEST_LIMIT",
+                "SRE_PLAN_PRICE_USD_MONTHLY",
+                "SRE_REQUEST_OVERAGE_USD_PER_1000",
+                "SRE_AUTH_ENABLED",
+                "SRE_ADMIN_API_KEY",
+                "SRE_VIEWER_API_KEY",
+            )
+        }
+        original_workspace = get_workspace()
+        workspace_id = original_workspace["id"] if original_workspace else "default"
+
+        def clean_fixtures():
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM billing_statements WHERE workspace_id = ? AND month = ?",
+                (workspace_id, month),
+            )
+            for request_id in usage_request_ids:
+                cur.execute(
+                    "DELETE FROM usage_events WHERE workspace_id = ? AND request_id = ?",
+                    (workspace_id, request_id),
+                )
+            conn.commit()
+            conn.close()
+
+        clean_fixtures()
+        try:
+            os.environ["SRE_PLAN"] = "team"
+            os.environ["SRE_SUBSCRIPTION_STATUS"] = "active"
+            os.environ["SRE_MONTHLY_REQUEST_LIMIT"] = "1000"
+            os.environ["SRE_PLAN_PRICE_USD_MONTHLY"] = "1000"
+            os.environ["SRE_REQUEST_OVERAGE_USD_PER_1000"] = "5"
+            os.environ["SRE_AUTH_ENABLED"] = "true"
+            os.environ["SRE_ADMIN_API_KEY"] = "billing-statement-admin"
+            os.environ["SRE_VIEWER_API_KEY"] = "billing-statement-viewer"
+            init_db()
+
+            conn = get_conn()
+            cur = conn.cursor()
+            for metric, quantity, request_id in (
+                ("api_request", 1250, usage_request_ids[0]),
+                ("llm_cost_usd_micro", 250000, usage_request_ids[1]),
+            ):
+                cur.execute(
+                    """
+                    INSERT INTO usage_events (
+                        id, workspace_id, metric, quantity, request_id, occurred_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        workspace_id,
+                        metric,
+                        quantity,
+                        request_id,
+                        "2000-02-15T12:00:00+00:00",
+                    ),
+                )
+            conn.commit()
+            conn.close()
+
+            admin_headers = {"X-SRE-API-Key": "billing-statement-admin"}
+            viewer_headers = {"X-SRE-API-Key": "billing-statement-viewer"}
+            with TestClient(app) as client:
+                os.environ["SRE_PLAN_PRICE_USD_MONTHLY"] = "0"
+                self.assertEqual(
+                    client.get(
+                        f"/billing/statements/preview?month={month}",
+                        headers=admin_headers,
+                    ).status_code,
+                    400,
+                )
+                os.environ["SRE_PLAN_PRICE_USD_MONTHLY"] = "1000"
+                preview_response = client.get(
+                    f"/billing/statements/preview?month={month}",
+                    headers=admin_headers,
+                )
+                self.assertEqual(preview_response.status_code, 200)
+                preview = preview_response.json()
+                self.assertTrue(preview["period_closed"])
+                self.assertTrue(preview["finalizable"])
+                self.assertEqual(preview["preview"]["usage"]["requests_used"], 1250)
+                self.assertEqual(preview["preview"]["usage"]["overage_requests"], 250)
+                self.assertEqual(preview["preview"]["pricing"]["overage_fee_usd"], 1.25)
+                self.assertEqual(preview["preview"]["pricing"]["amount_due_usd"], 1001.25)
+                self.assertEqual(preview["preview"]["internal_cost"]["llm_cost_usd"], 0.25)
+                self.assertEqual(
+                    client.get(
+                        f"/billing/statements/preview?month={month}",
+                        headers=viewer_headers,
+                    ).status_code,
+                    403,
+                )
+
+                current_month = datetime.now(timezone.utc).strftime("%Y-%m")
+                self.assertEqual(
+                    client.post(
+                        "/billing/statements/finalize",
+                        headers=admin_headers,
+                        json={
+                            "month": current_month,
+                            "idempotency_key": "billing-current-month-denied",
+                        },
+                    ).status_code,
+                    400,
+                )
+
+                payload = {
+                    "month": month,
+                    "idempotency_key": "billing-statement-regression-v1",
+                }
+                finalized = client.post(
+                    "/billing/statements/finalize",
+                    headers=admin_headers,
+                    json=payload,
+                )
+                self.assertEqual(finalized.status_code, 201)
+                self.assertTrue(finalized.json()["created"])
+                statement = finalized.json()["statement"]
+                self.assertTrue(statement["integrity"]["valid"])
+                statement_id = statement["id"]
+
+                replay = client.post(
+                    "/billing/statements/finalize",
+                    headers=admin_headers,
+                    json=payload,
+                )
+                self.assertEqual(replay.status_code, 201)
+                self.assertFalse(replay.json()["created"])
+                self.assertEqual(replay.json()["statement"]["id"], statement_id)
+                conflict = client.post(
+                    "/billing/statements/finalize",
+                    headers=admin_headers,
+                    json={
+                        "month": "2000-03",
+                        "idempotency_key": payload["idempotency_key"],
+                    },
+                )
+                self.assertEqual(conflict.status_code, 409)
+
+                conn = get_conn()
+                conn.cursor().execute(
+                    """
+                    INSERT INTO usage_events (
+                        id, workspace_id, metric, quantity, request_id, occurred_at
+                    ) VALUES (?, ?, 'api_request', 100, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        workspace_id,
+                        usage_request_ids[2],
+                        "2000-02-20T12:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+                conn.close()
+                detail = client.get(
+                    f"/billing/statements/{month}",
+                    headers=admin_headers,
+                )
+                self.assertEqual(detail.status_code, 200)
+                self.assertEqual(
+                    detail.json()["statement"]["payload"]["usage"]["requests_used"],
+                    1250,
+                )
+                listed = client.get(
+                    "/billing/statements",
+                    headers=admin_headers,
+                )
+                self.assertEqual(listed.status_code, 200)
+                self.assertTrue(
+                    any(
+                        item["id"] == statement_id
+                        for item in listed.json()["statements"]
+                    )
+                )
+                changed_preview = client.get(
+                    f"/billing/statements/preview?month={month}",
+                    headers=admin_headers,
+                ).json()
+                self.assertFalse(changed_preview["finalizable"])
+                self.assertEqual(changed_preview["preview"]["usage"]["requests_used"], 1350)
+
+                exported = client.get(
+                    f"/billing/statements/{month}/export.csv",
+                    headers=admin_headers,
+                )
+                self.assertEqual(exported.status_code, 200)
+                self.assertIn("amount_due_usd", exported.text)
+                self.assertEqual(
+                    exported.headers["x-billing-statement-integrity"],
+                    "true",
+                )
+
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT payload_json FROM billing_statements WHERE id = ?",
+                    (statement_id,),
+                )
+                original_payload_json = cur.fetchone()["payload_json"]
+                cur.execute(
+                    "UPDATE billing_statements SET payload_json = '{}' WHERE id = ?",
+                    (statement_id,),
+                )
+                conn.commit()
+                conn.close()
+                invalid = client.get(
+                    f"/billing/statements/{month}/verify",
+                    headers=admin_headers,
+                )
+                self.assertEqual(invalid.status_code, 200)
+                self.assertFalse(invalid.json()["valid"])
+                self.assertEqual(
+                    client.get(
+                        f"/billing/statements/{month}/export.csv",
+                        headers=admin_headers,
+                    ).status_code,
+                    409,
+                )
+                self.assertEqual(
+                    client.post(
+                        "/billing/statements/finalize",
+                        headers=admin_headers,
+                        json=payload,
+                    ).status_code,
+                    409,
+                )
+
+                conn = get_conn()
+                conn.cursor().execute(
+                    "UPDATE billing_statements SET payload_json = ? WHERE id = ?",
+                    (original_payload_json, statement_id),
+                )
+                conn.commit()
+                conn.close()
+                valid = client.get(
+                    f"/billing/statements/{month}/verify",
+                    headers=admin_headers,
+                )
+                self.assertTrue(valid.json()["valid"])
+        finally:
+            clean_fixtures()
+            for name, value in tracked_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if original_workspace:
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE workspaces
+                    SET name = ?, plan = ?, status = ?, subscription_status = ?,
+                        trial_ends_at = ?, current_period_end = ?,
+                        subscription_updated_at = ?, monthly_request_limit = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        original_workspace["name"],
+                        original_workspace["plan"],
+                        original_workspace["status"],
+                        original_workspace.get("subscription_status"),
+                        original_workspace.get("trial_ends_at"),
+                        original_workspace.get("current_period_end"),
+                        original_workspace.get("subscription_updated_at"),
+                        original_workspace["monthly_request_limit"],
+                        original_workspace["updated_at"],
+                        original_workspace["id"],
+                    ),
+                )
+                conn.commit()
+                conn.close()
 
     def test_subscription_expiry_blocks_operations_without_blocking_recovery(self):
         tracked_env = {

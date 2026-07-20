@@ -60,6 +60,12 @@ services:
         sync: false
       - key: SRE_CURRENT_PERIOD_END
         sync: false
+      - key: SRE_PLAN_PRICE_USD_MONTHLY
+        sync: false
+      - key: SRE_REQUEST_OVERAGE_USD_PER_1000
+        sync: false
+      - key: SRE_REQUIRE_FINALIZED_BILLING_BEFORE_USAGE_PURGE
+        value: "true"
       - key: EXECUTION_GUARD_ENABLED
         value: "true"
       - key: EXECUTION_GUARD_TOKEN

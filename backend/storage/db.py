@@ -24,6 +24,7 @@ MIGRATION_MANIFEST = (
     (7, "worker_heartbeat_readiness", "2026-07-19-reliability-v7"),
     (8, "pilot_value_outcomes", "2026-07-20-commercial-v8"),
     (9, "subscription_lifecycle", "2026-07-20-commercial-v9"),
+    (10, "immutable_billing_statements", "2026-07-20-commercial-v10"),
 )
 CURRENT_SCHEMA_VERSION = MIGRATION_MANIFEST[-1][0]
 _POSTGRES_MIGRATION_LOCK_ID = 7_361_904_211
@@ -683,6 +684,24 @@ def _initialize_schema(conn, cur):
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_usage_events_workspace_time
     ON usage_events(workspace_id, occurred_at)
+    """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS billing_statements (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        month TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        finalized_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(workspace_id, month),
+        UNIQUE(workspace_id, idempotency_key)
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_billing_statements_workspace_time
+    ON billing_statements(workspace_id, created_at)
     """)
 
     cur.execute("""

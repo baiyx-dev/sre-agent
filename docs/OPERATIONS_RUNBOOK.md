@@ -68,7 +68,9 @@ trial 首次初始化时根据 `SRE_TRIAL_DAYS` 固化到期时间，或采用�
 
 环境 Bootstrap Key 仅用于首次创建密钥和账户恢复。生产已有工作区密钥后，Bootstrap Key 不能调用服务、聊天、Incident 或变更业务接口；日常请求必须使用可撤销、可计量的工作区 Key。
 
-模型价格通过 `SRE_LLM_INPUT_COST_PER_MILLION_USD` 和 `SRE_LLM_OUTPUT_COST_PER_MILLION_USD` 配置。每次成功响应会记录输入/输出 token 和当时估算成本；变更价格只影响新事件。管理员每月使用 `/billing/usage.csv?month=YYYY-MM` 导出账单底稿。
+模型价格通过 `SRE_LLM_INPUT_COST_PER_MILLION_USD` 和 `SRE_LLM_OUTPUT_COST_PER_MILLION_USD` 配置。每次成功响应会记录输入/输出 token 和当时估算成本；变更价格只影响新事件。合同月费和超额单价分别通过 `SRE_PLAN_PRICE_USD_MONTHLY`、`SRE_REQUEST_OVERAGE_USD_PER_1000` 配置。
+
+每个 UTC 月结束后，管理员先调用 `/billing/statements/preview` 核对套餐、用量、超额和金额，再用唯一幂等键调用 `/billing/statements/finalize`。定稿快照不会因迟到事件或保留清理而变化；导出的 JSON/CSV 和 `payload_hash` 应一并写入财务归档。生产默认启用 `SRE_REQUIRE_FINALIZED_BILLING_BEFORE_USAGE_PURGE=true`，存在未定稿月份时拒绝删除用量。完整流程见 [BILLING_STATEMENTS.md](BILLING_STATEMENTS.md)。
 
 ## 数据库升级
 
@@ -95,7 +97,7 @@ python -m backend.maintenance purge
 python -m backend.maintenance purge --apply --confirm PURGE:<workspace-id>
 ```
 
-清理在单一事务中按子表到主表顺序执行；确认字符串必须与当前工作区完全一致。默认保留日志 30 天、会话 90 天、任务 180 天、用量 400 天、Incident/变更 730 天、执行审计 7 年，可通过 `SRE_RETENTION_*_DAYS` 调整。审计清理只删除已过期的连续链前缀，并在同一事务写入链头 checkpoint；清理前若 `/audit/verify` 失败，操作会拒绝执行。归档必须同时保存导出的审计和当时的链头。
+清理在单一事务中按子表到主表顺序执行；确认字符串必须与当前工作区完全一致。默认保留日志 30 天、会话 90 天、任务 180 天、用量 400 天、Incident/变更 730 天、执行审计 7 年，可通过 `SRE_RETENTION_*_DAYS` 调整。生产用量清理还要求所有受影响月份已生成账单快照。审计清理只删除已过期的连续链前缀，并在同一事务写入链头 checkpoint；清理前若 `/audit/verify` 失败，操作会拒绝执行。归档必须同时保存导出的审计和当时的链头。
 
 ## 审计链校验
 
@@ -109,7 +111,7 @@ python -m backend.maintenance purge --apply --confirm PURGE:<workspace-id>
 - PostgreSQL 备份应使用托管数据库的 PITR/快照或 `pg_dump`，SQLite maintenance 命令会拒绝在 PostgreSQL 模式下运行。
 - 审计记录已有可校验哈希链、操作者和变更关联，但外部不可变链头归档仍需客户存储或托管审计服务完成。
 - Webhook 执行器必须由对端完成真实发布和健康验证后返回 `verified: true`。
-- 试用到期和订阅状态已由服务端执行，但尚未接入支付网关、自动续费、发票系统或加密签名的离线许可证；自托管客户的部署配置仍属于合同和运维控制边界。
+- 已生成带哈希的不可变月度账单快照，但尚未接入支付网关、自动续费、税务/发票系统或加密签名的离线许可证；自托管客户的部署配置仍属于合同和运维控制边界。
 
 ## Render 托管拓扑
 

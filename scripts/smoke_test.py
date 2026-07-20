@@ -94,6 +94,17 @@ def main() -> None:
     )
     checks.append("subscription_access")
 
+    statement_status, statement_preview, _ = call(
+        args.base_url,
+        "/billing/statements/preview?month=2000-01",
+        api_key=args.api_key,
+    )
+    require(
+        statement_status == 200 and statement_preview.get("period_closed") is True,
+        f"billing statement preview failed: {statement_preview}",
+    )
+    checks.append("billing_statement_preview")
+
     services_status, services, _ = call(args.base_url, "/services/", api_key=args.api_key)
     require(services_status == 200 and isinstance(services.get("services"), list), "services failed")
     checks.append("services")

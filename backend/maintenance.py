@@ -165,6 +165,34 @@ def _audit_prunable_prefix(cur, cutoff: str) -> dict:
     }
 
 
+def _billing_statement_guard(cur, usage_cutoff: str) -> dict:
+    environment = os.getenv("SRE_ENVIRONMENT", "development").strip().lower()
+    enabled = os.getenv(
+        "SRE_REQUIRE_FINALIZED_BILLING_BEFORE_USAGE_PURGE",
+        "true" if environment == "production" else "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    cur.execute(
+        """
+        SELECT DISTINCT substr(usage.occurred_at, 1, 7) AS month
+        FROM usage_events AS usage
+        WHERE usage.workspace_id = ? AND usage.occurred_at < ?
+          AND NOT EXISTS (
+              SELECT 1 FROM billing_statements AS bill
+              WHERE bill.workspace_id = usage.workspace_id
+                AND bill.month = substr(usage.occurred_at, 1, 7)
+          )
+        ORDER BY month ASC
+        """,
+        (configured_workspace_id(), usage_cutoff),
+    )
+    months = [row["month"] for row in cur.fetchall() if row["month"]]
+    return {
+        "enabled": enabled,
+        "unfinalized_usage_months": months,
+        "blocked": enabled and bool(months),
+    }
+
+
 def retention_preview(now: datetime | None = None) -> dict:
     cutoffs = _retention_cutoffs(now)
     conn = get_conn()
@@ -177,6 +205,7 @@ def retention_preview(now: datetime | None = None) -> dict:
 
     terminal_statuses = "'executed','dry_run','denied','failed','unknown','cancelled','expired'"
     audit_prefix = _audit_prunable_prefix(cur, cutoffs["execution_audits"]["iso"])
+    billing_guard = _billing_statement_guard(cur, cutoffs["usage_events"]["iso"])
     candidates = {
         "logs": count("SELECT COUNT(*) AS count FROM logs WHERE timestamp < ?", (cutoffs["logs"]["legacy"],)),
         "chat_sessions": count(
@@ -237,6 +266,7 @@ def retention_preview(now: datetime | None = None) -> dict:
         },
         "candidates": candidates,
         "candidate_total": sum(candidates.values()),
+        "billing_statement_guard": billing_guard,
     }
 
 
@@ -252,6 +282,14 @@ def purge_retained_data(
     if not audit_integrity["valid"]:
         raise RuntimeError("audit ledger verification failed; refusing retention purge")
     preview = retention_preview(now)
+    if preview["billing_statement_guard"]["blocked"]:
+        months = ", ".join(
+            preview["billing_statement_guard"]["unfinalized_usage_months"]
+        )
+        raise RuntimeError(
+            "usage retention is blocked until billing statements are finalized for: "
+            f"{months}"
+        )
     cutoffs = _retention_cutoffs(now)
     conn = get_conn()
     cur = conn.cursor()

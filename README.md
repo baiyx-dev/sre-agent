@@ -570,10 +570,17 @@ payment-service 状态
 - `GET /billing/usage`：查询 UTC 自然月的持久化请求用量、额度与剩余额度
 - `GET /billing/subscription`：查询试用/付费状态、剩余天数和配置变更事件
 - `GET /billing/usage.csv?month=YYYY-MM`：管理员导出逐事件用量、token、成本和调用元数据
+- `GET /billing/statements/preview?month=YYYY-MM`：管理员按当前合同价格预览月度账单
+- `POST /billing/statements/finalize`：管理员幂等冻结已结束月份的用量、金额和校验哈希
+- `GET /billing/statements`、`GET /billing/statements/{month}`：查询已定稿账单
+- `GET /billing/statements/{month}/verify`：重新计算规范化快照哈希并检查完整性
+- `GET /billing/statements/{month}/export.csv`：导出稳定的开票底稿
 - `POST /billing/pilot-outcomes`：管理员按幂等键记录节省时间、建议采纳、结果成功和支持工时
 - `GET /billing/pilot-outcomes`：管理员查询指定月份或日期范围内的原始价值证据
 - `GET /billing/value-report`：管理员汇总活动、MTTR、变更结果、价值与单位经济性
 - `GET /billing/value-report.csv`：管理员导出单行周报/月报；支持 `month` 或 `start_date`/`end_date`
+
+动态用量只能用于检查，不能直接作为长期不变的开票事实。每个 UTC 月结束后按 [BILLING_STATEMENTS.md](docs/BILLING_STATEMENTS.md) 先预览再定稿；生产数据保留默认拒绝清理尚未定稿月份的用量。
 
 
 ## 外部数据源约定
