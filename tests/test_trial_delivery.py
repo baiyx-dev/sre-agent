@@ -9,9 +9,11 @@ from pathlib import Path
 from scripts.generate_trial_env import read_trial_environment
 from scripts.prepare_trial_delivery import (
     SECRET_KEYS,
+    prepare_render_blueprint,
     prepare_trial_delivery,
     validate_workspace_id,
     validate_workspace_name,
+    verify_render_blueprint,
     verify_trial_delivery,
 )
 
@@ -105,7 +107,7 @@ class TrialDeliveryTests(unittest.TestCase):
                 encoding="utf-8",
                 newline="\n",
             )
-            with self.assertRaisesRegex(ValueError, "does not match manifest"):
+            with self.assertRaisesRegex(ValueError, "Render isolation metadata"):
                 verify_trial_delivery(delivery)
 
     def test_rejects_unsafe_customer_identifiers_and_names(self):
@@ -164,6 +166,7 @@ class TrialDeliveryTests(unittest.TestCase):
     def test_cli_reports_only_nonsecret_delivery_metadata(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             delivery = Path(temp_dir) / "customer-cli"
+            blueprint = Path(temp_dir) / "public" / "render.yaml"
             result = subprocess.run(
                 [
                     sys.executable,
@@ -181,6 +184,8 @@ class TrialDeliveryTests(unittest.TestCase):
                     "mailto:sales@example.com",
                     "--output-dir",
                     str(delivery),
+                    "--render-output",
+                    str(blueprint),
                 ],
                 check=True,
                 capture_output=True,
@@ -189,9 +194,97 @@ class TrialDeliveryTests(unittest.TestCase):
             values = read_trial_environment(delivery / ".env.trial.local")
 
             self.assertIn('"secrets_printed": false', result.stdout)
+            self.assertTrue(verify_render_blueprint(delivery, blueprint)["valid"])
             for key in SECRET_KEYS:
                 self.assertNotIn(values[key], result.stdout)
                 self.assertNotIn(values[key], result.stderr)
+
+    def test_prepares_a_secret_free_customer_render_blueprint(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            delivery = Path(temp_dir) / "customer-a"
+            blueprint = Path(temp_dir) / "deployments" / "customer-a" / "render.yaml"
+            prepare_trial_delivery(
+                delivery,
+                workspace_id="customer-a",
+                workspace_name="客户 A #1",
+                upgrade_contact_url="mailto:sales@example.com",
+                trial_days=21,
+            )
+
+            report = prepare_render_blueprint(delivery, blueprint)
+            content = blueprint.read_text(encoding="utf-8")
+            values = read_trial_environment(delivery / ".env.trial.local")
+
+            self.assertEqual(report["render_database"], "sre-trial-customer-a-db")
+            self.assertEqual(report["render_web"], "sre-trial-customer-a")
+            self.assertEqual(report["render_worker"], "sre-trial-customer-a-worker")
+            self.assertIn("value: customer-a", content)
+            self.assertIn('value: "客户 A #1"', content)
+            self.assertIn('value: "mailto:sales@example.com"', content)
+            self.assertIn('value: "21"', content)
+            for key in SECRET_KEYS:
+                self.assertNotIn(values[key], content)
+
+            with self.assertRaises(FileExistsError):
+                prepare_render_blueprint(delivery, blueprint)
+
+    def test_render_verifier_detects_customer_metadata_tampering(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            delivery = Path(temp_dir) / "customer-a"
+            blueprint = Path(temp_dir) / "render.yaml"
+            prepare_trial_delivery(
+                delivery,
+                workspace_id="customer-a",
+                workspace_name="Customer A",
+                upgrade_contact_url="mailto:sales@example.com",
+            )
+            prepare_render_blueprint(delivery, blueprint)
+            blueprint.write_text(
+                blueprint.read_text(encoding="utf-8").replace(
+                    "value: customer-a",
+                    "value: another-customer",
+                    1,
+                ),
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            with self.assertRaisesRegex(ValueError, "does not match delivery"):
+                verify_render_blueprint(delivery, blueprint)
+
+    def test_cli_does_not_create_private_delivery_when_blueprint_exists(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            delivery = Path(temp_dir) / "customer-existing"
+            blueprint = Path(temp_dir) / "render.yaml"
+            blueprint.write_text("existing\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(
+                        Path(__file__).parents[1]
+                        / "scripts"
+                        / "prepare_trial_delivery.py"
+                    ),
+                    "create",
+                    "--workspace-id",
+                    "customer-existing",
+                    "--workspace-name",
+                    "Customer Existing",
+                    "--upgrade-contact-url",
+                    "mailto:sales@example.com",
+                    "--output-dir",
+                    str(delivery),
+                    "--render-output",
+                    str(blueprint),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(delivery.exists())
+            self.assertEqual(blueprint.read_text(encoding="utf-8"), "existing\n")
 
 
 if __name__ == "__main__":

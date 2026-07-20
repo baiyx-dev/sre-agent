@@ -400,7 +400,7 @@ docker compose up --build
 
 ## 部署到 Render
 
-仓库已包含 `render.yaml`，可以直接按 Blueprint 方式部署。
+仓库根目录的 `render.yaml` 是单实例拓扑模板。真实客户先按[每客户独立试用交付包](docs/TRIAL_DELIVERY.md)生成 `deployments/trials/<workspace-id>/render.yaml`，再按 Blueprint 方式部署；不要让多个客户复用根模板中的固定资源名。
 
 ### 1. 推送代码到 GitHub
 
@@ -412,7 +412,7 @@ docker compose up --build
 2. 选择 `New +`
 3. 选择 `Blueprint`
 4. 连接当前 GitHub 仓库
-5. Render 会自动识别仓库根目录下的 `render.yaml`
+5. 在 Blueprint Path 中选择该客户的 `deployments/trials/<workspace-id>/render.yaml`；只有模板演练才使用根目录的 `render.yaml`
 
 ### 3. 配置环境变量
 

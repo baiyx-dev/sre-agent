@@ -25,7 +25,7 @@ except ModuleNotFoundError:
     )
 
 
-DELIVERY_SCHEMA_VERSION = 1
+DELIVERY_SCHEMA_VERSION = 2
 SECRET_KEYS = (
     "SRE_POSTGRES_PASSWORD",
     "SRE_ADMIN_API_KEY",
@@ -40,6 +40,7 @@ PUBLIC_ENV_KEYS = (
     "SRE_WORKSPACE_NAME",
 )
 _WORKSPACE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?$")
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 def validate_workspace_id(value: str) -> str:
@@ -66,6 +67,16 @@ def _fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
+def _render_resource_names(workspace_id: str) -> dict[str, str]:
+    prefix = f"sre-trial-{workspace_id}"
+    return {
+        "blueprint_path": f"deployments/trials/{workspace_id}/render.yaml",
+        "database": f"{prefix}-db",
+        "web": prefix,
+        "worker": f"{prefix}-worker",
+    }
+
+
 def _write_private_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
     try:
@@ -85,7 +96,9 @@ Do not commit it, attach it to tickets, or reuse it for another customer.
 ## Verify before use
 
 ```powershell
-python scripts/prepare_trial_delivery.py verify --delivery-dir \"{output.as_posix()}\"
+python scripts/prepare_trial_delivery.py verify `
+  --delivery-dir \"{output.as_posix()}\" `
+  --render-blueprint "{manifest['render']['blueprint_path']}"
 ```
 
 ## Start the isolated Compose project
@@ -113,13 +126,14 @@ support ticket.
 
 ## Render
 
-Create a separate Blueprint for this customer. Set `SRE_WORKSPACE_ID` to
-`{manifest['workspace_id']}` and `SRE_WORKSPACE_NAME` to
-`{manifest['workspace_name']}`. Copy `SRE_ADMIN_API_KEY`,
-`SRE_TRIAL_ACTIVATION_TOKEN`, and `EXECUTION_GUARD_TOKEN` into their matching
-Render Secret fields. Render manages PostgreSQL through `DATABASE_URL`, so do
-not copy `SRE_POSTGRES_PASSWORD` there. Service/database names and the
-Blueprint itself must also be unique per customer.
+The CLI also writes a secret-free customer Blueprint to
+`{manifest['render']['blueprint_path']}`. Review and commit that one deployment
+file to an access-controlled repository, then create a separate Render
+Blueprint and select this custom Blueprint path. Copy `SRE_ADMIN_API_KEY`,
+`SRE_TRIAL_ACTIVATION_TOKEN`, and
+`EXECUTION_GUARD_TOKEN` from the private env file into their matching Render
+Secret fields. Render manages PostgreSQL through `DATABASE_URL`, so do not copy
+`SRE_POSTGRES_PASSWORD` there.
 
 ## Stop without deleting customer data
 
@@ -175,6 +189,7 @@ def prepare_trial_delivery(
             "EXECUTION_GUARD_TOKEN",
         ],
         "secret_fingerprints": secret_fingerprints,
+        "render": _render_resource_names(normalized_id),
     }
 
     try:
@@ -228,6 +243,9 @@ def verify_trial_delivery(delivery_dir: Path) -> dict:
         set(SECRET_KEYS) - {"SRE_TRIAL_ACTIVATION_TOKEN"}
     ):
         raise ValueError("invalid operator secret ownership metadata")
+    expected_render = _render_resource_names(str(manifest.get("workspace_id") or ""))
+    if manifest.get("render") != expected_render:
+        raise ValueError("invalid Render isolation metadata")
 
     required_keys = set(SECRET_KEYS) | set(PUBLIC_ENV_KEYS)
     missing_keys = sorted(required_keys - set(values))
@@ -305,6 +323,156 @@ def verify_trial_delivery(delivery_dir: Path) -> dict:
     }
 
 
+def _replace_blueprint_fragment(
+    content: str,
+    old: str,
+    new: str,
+    *,
+    expected_count: int | None = None,
+) -> str:
+    count = content.count(old)
+    if count == 0 or (expected_count is not None and count != expected_count):
+        raise ValueError(f"Render template fragment count mismatch: {old!r}")
+    return content.replace(old, new)
+
+
+def render_customer_blueprint(template: str, manifest: dict) -> str:
+    workspace_id = manifest["workspace_id"]
+    workspace_name = manifest["workspace_name"]
+    upgrade_contact_url = manifest["upgrade_contact_url"]
+    trial_days = manifest["trial_days"]
+    render = manifest["render"]
+
+    content = template.replace("\r\n", "\n")
+    content = _replace_blueprint_fragment(
+        content,
+        "sre-agent-db",
+        render["database"],
+        expected_count=3,
+    )
+    content = _replace_blueprint_fragment(
+        content,
+        "name: sre-agent-worker\n",
+        f"name: {render['worker']}\n",
+        expected_count=1,
+    )
+    content = _replace_blueprint_fragment(
+        content,
+        "name: sre-agent\n",
+        f"name: {render['web']}\n",
+    )
+    content = _replace_blueprint_fragment(
+        content,
+        "      - key: SRE_WORKSPACE_ID\n        value: default\n",
+        f"      - key: SRE_WORKSPACE_ID\n        value: {workspace_id}\n",
+        expected_count=1,
+    )
+    content = _replace_blueprint_fragment(
+        content,
+        "      - key: SRE_WORKSPACE_NAME\n        value: SRE Agent workspace\n",
+        "      - key: SRE_WORKSPACE_NAME\n"
+        f"        value: {json.dumps(workspace_name, ensure_ascii=False)}\n",
+        expected_count=1,
+    )
+    content = _replace_blueprint_fragment(
+        content,
+        '      - key: SRE_TRIAL_DAYS\n        value: "14"\n',
+        f'      - key: SRE_TRIAL_DAYS\n        value: "{trial_days}"\n',
+        expected_count=1,
+    )
+    content = _replace_blueprint_fragment(
+        content,
+        "      - key: SRE_UPGRADE_CONTACT_URL\n        sync: false\n",
+        "      - key: SRE_UPGRADE_CONTACT_URL\n"
+        f"        value: {json.dumps(upgrade_contact_url)}\n",
+        expected_count=1,
+    )
+    return content
+
+
+def verify_render_blueprint(delivery_dir: Path, blueprint_path: Path) -> dict:
+    delivery = delivery_dir.expanduser().resolve()
+    report = verify_trial_delivery(delivery)
+    manifest = json.loads((delivery / "delivery.json").read_text(encoding="utf-8"))
+    values = read_trial_environment(delivery / ".env.trial.local")
+    blueprint = blueprint_path.expanduser().resolve()
+    if not blueprint.is_file():
+        raise ValueError("customer Render Blueprint is missing")
+    content = blueprint.read_text(encoding="utf-8").replace("\r\n", "\n")
+    render = manifest["render"]
+
+    required_fragments = (
+        f"  - name: {render['database']}\n",
+        f"    name: {render['web']}\n",
+        f"    name: {render['worker']}\n",
+        f"      - key: SRE_WORKSPACE_ID\n        value: {manifest['workspace_id']}\n",
+        "      - key: SRE_WORKSPACE_NAME\n"
+        f"        value: {json.dumps(manifest['workspace_name'], ensure_ascii=False)}\n",
+        "      - key: SRE_UPGRADE_CONTACT_URL\n"
+        f"        value: {json.dumps(manifest['upgrade_contact_url'])}\n",
+        f'      - key: SRE_TRIAL_DAYS\n        value: "{manifest["trial_days"]}"\n',
+    )
+    if any(fragment not in content for fragment in required_fragments):
+        raise ValueError("customer Render Blueprint does not match delivery metadata")
+    if "name: sre-agent\n" in content or "sre-agent-db" in content:
+        raise ValueError("customer Render Blueprint retains shared default resource names")
+    for key in (
+        "SRE_ADMIN_API_KEY",
+        "SRE_TRIAL_ACTIVATION_TOKEN",
+        "EXECUTION_GUARD_TOKEN",
+    ):
+        if f"      - key: {key}\n        sync: false\n" not in content:
+            raise ValueError(f"Render secret must remain operator-supplied: {key}")
+    if "SRE_POSTGRES_PASSWORD" in content:
+        raise ValueError("local PostgreSQL password must not be copied into Render")
+    if any(values[key] in content for key in SECRET_KEYS):
+        raise ValueError("delivery secret leaked into customer Render Blueprint")
+
+    return {
+        **report,
+        "render_blueprint": str(blueprint),
+        "render_database": render["database"],
+        "render_web": render["web"],
+        "render_worker": render["worker"],
+    }
+
+
+def prepare_render_blueprint(
+    delivery_dir: Path,
+    output_path: Path,
+    *,
+    template_path: Path | None = None,
+) -> dict:
+    delivery = delivery_dir.expanduser().resolve()
+    verify_trial_delivery(delivery)
+    manifest = json.loads((delivery / "delivery.json").read_text(encoding="utf-8"))
+    template = (template_path or (_REPOSITORY_ROOT / "render.yaml")).resolve()
+    output = output_path.expanduser().resolve()
+    if output.exists():
+        raise FileExistsError(
+            "customer Render Blueprint already exists; choose a new customer path"
+        )
+    if not template.is_file():
+        raise ValueError("Render Blueprint template is missing")
+
+    created_parent = not output.parent.exists()
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        rendered = render_customer_blueprint(
+            template.read_text(encoding="utf-8"),
+            manifest,
+        )
+        output.write_text(rendered, encoding="utf-8", newline="\n")
+        verify_render_blueprint(delivery, output)
+    except Exception:
+        if output.is_file():
+            output.unlink()
+        if created_parent and output.parent.is_dir() and not any(output.parent.iterdir()):
+            output.parent.rmdir()
+        raise
+    return verify_render_blueprint(delivery, output)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Prepare and verify one isolated customer trial delivery"
@@ -317,28 +485,63 @@ def main() -> None:
     create_parser.add_argument("--trial-days", type=int, default=14)
     create_parser.add_argument("--http-port", type=int, default=8000)
     create_parser.add_argument("--output-dir")
+    create_parser.add_argument("--render-output")
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--delivery-dir", required=True)
+    verify_parser.add_argument("--render-blueprint")
     args = parser.parse_args()
 
     if args.action == "create":
         workspace_id = validate_workspace_id(args.workspace_id)
         output = Path(args.output_dir or f".trial-deliveries/{workspace_id}")
-        prepare_trial_delivery(
-            output,
-            workspace_id=workspace_id,
-            workspace_name=args.workspace_name,
-            upgrade_contact_url=args.upgrade_contact_url,
-            trial_days=args.trial_days,
-            http_port=args.http_port,
+        render_output = Path(
+            args.render_output
+            or _render_resource_names(workspace_id)["blueprint_path"]
         )
-        report = verify_trial_delivery(output)
+        resolved_output = output.expanduser().resolve()
+        resolved_render_output = render_output.expanduser().resolve()
+        if resolved_render_output.exists():
+            raise FileExistsError(
+                "customer Render Blueprint already exists; choose a new customer path"
+            )
+        try:
+            resolved_render_output.relative_to(resolved_output)
+        except ValueError:
+            pass
+        else:
+            raise ValueError(
+                "public Render Blueprint must be outside the private delivery directory"
+            )
+
+        delivery_created = False
+        try:
+            prepare_trial_delivery(
+                output,
+                workspace_id=workspace_id,
+                workspace_name=args.workspace_name,
+                upgrade_contact_url=args.upgrade_contact_url,
+                trial_days=args.trial_days,
+                http_port=args.http_port,
+            )
+            delivery_created = True
+            report = prepare_render_blueprint(output, render_output)
+        except Exception:
+            if delivery_created and resolved_output.is_dir():
+                shutil.rmtree(resolved_output)
+            raise
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
         print(f"Delivery prepared at: {output.expanduser().resolve()}")
+        print(f"Secret-free Render Blueprint prepared at: {render_output.resolve()}")
         print("Secrets were written only to the private environment file.")
         return
 
-    report = verify_trial_delivery(Path(args.delivery_dir))
+    if args.render_blueprint:
+        report = verify_render_blueprint(
+            Path(args.delivery_dir),
+            Path(args.render_blueprint),
+        )
+    else:
+        report = verify_trial_delivery(Path(args.delivery_dir))
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
 
 

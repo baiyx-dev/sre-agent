@@ -158,7 +158,8 @@ jobs:
             --workspace-name "CI trial" \
             --upgrade-contact-url mailto:trial-ci@example.invalid
           python scripts/prepare_trial_delivery.py verify \
-            --delivery-dir .trial-deliveries/ci-trial
+            --delivery-dir .trial-deliveries/ci-trial \
+            --render-blueprint deployments/trials/ci-trial/render.yaml
       - name: Validate local trial Compose configuration
         run: >-
           docker compose

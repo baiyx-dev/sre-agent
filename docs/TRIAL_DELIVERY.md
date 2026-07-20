@@ -15,7 +15,7 @@ python scripts/prepare_trial_delivery.py create `
   --http-port 8000
 ```
 
-默认创建被 Git 忽略的 `.trial-deliveries/acme-sre/`。工作区 ID 只能包含小写字母、数字和内部连字符，最长 40 位；它同时参与 Compose 项目隔离。目录已经存在时命令直接失败，不提供覆盖参数，避免静默轮换已交付实例的恢复密钥或邀请令牌。
+默认创建被 Git 忽略的 `.trial-deliveries/acme-sre/`，同时生成不含密钥、可供代码审查的 `deployments/trials/acme-sre/render.yaml`。工作区 ID 只能包含小写字母、数字和内部连字符，最长 40 位；它同时参与 Compose 与 Render 资源隔离。私有目录或无密钥 Blueprint 已经存在时命令直接失败，不提供覆盖参数，避免静默轮换已交付实例或覆盖现有云资源定义。
 
 交付目录包含：
 
@@ -25,6 +25,8 @@ python scripts/prepare_trial_delivery.py create `
 | `delivery.json` | 内部非密钥 | 交付 ID、客户工作区、Compose 项目名和密钥短指纹 |
 | `README.md` | 内部操作说明 | 该客户实例的验证、启动、交接和停止命令 |
 
+`deployments/trials/<workspace-id>/render.yaml` 不含密钥，只包含工作区、唯一资源名和非敏感配置；三个 Render Secret 仍保持 `sync: false`，可以单独审查并提交。但工作区标识仍可能属于客户内部元数据：应提交到访问受控的部署仓库；若代码仓库公开，必须使用无法识别真实客户的别名。不要把私有交付目录强制加入 Git。
+
 生成器不会在终端、`delivery.json` 或 README 中打印任何密钥。短指纹只用于确认两个操作人员持有的是同一份交付包，不能用于认证。
 
 ## 2. 启动前验证
@@ -33,10 +35,11 @@ python scripts/prepare_trial_delivery.py create `
 
 ```powershell
 python scripts/prepare_trial_delivery.py verify `
-  --delivery-dir .trial-deliveries/acme-sre
+  --delivery-dir .trial-deliveries/acme-sre `
+  --render-blueprint deployments/trials/acme-sre/render.yaml
 ```
 
-验证会检查必填键、密钥强度与唯一性、密钥指纹、工作区元数据、升级地址和 Compose 项目隔离名，并确认密钥没有泄漏到非敏感文件。输出只包含交付 ID、工作区 ID、项目名和密钥数量。
+验证会检查必填键、密钥强度与唯一性、密钥指纹、工作区元数据、升级地址、Compose 项目隔离名和 Render 资源引用，并确认密钥没有泄漏到无密钥文件。输出只包含交付/工作区 ID、Compose 与 Render 资源名、文件路径和密钥数量，不包含密钥值。
 
 ## 3. Compose 隔离边界
 
@@ -53,7 +56,7 @@ python scripts/prepare_trial_delivery.py verify `
 
 ## 5. Render 托管
 
-每个客户创建独立 Blueprint、PostgreSQL、Web 和 Worker，并使用唯一服务/数据库名称。将 `SRE_WORKSPACE_ID`、`SRE_WORKSPACE_NAME`、恢复管理员 Key、激活令牌、升级联系地址和执行保护令牌填入该客户的 Render 配置。Render 通过 `DATABASE_URL` 管理数据库连接，不要把只供本地 Compose 使用的 `SRE_POSTGRES_PASSWORD` 填入 Render。
+每个客户创建独立 Blueprint、PostgreSQL、Web 和 Worker，并使用生成文件中的唯一服务/数据库名称。[Render 支持在创建 Blueprint 时指定自定义文件路径](https://render.com/docs/infrastructure-as-code)；选择 `deployments/trials/<workspace-id>/render.yaml`，不要退回根目录的通用模板。客户工作区、升级联系地址和试用天数已经固化在文件中；恢复管理员 Key、激活令牌和执行保护令牌仍需在 Render 中单独填写。Render 通过 `DATABASE_URL` 管理数据库连接，不要把只供本地 Compose 使用的 `SRE_POSTGRES_PASSWORD` 填入 Render。
 
 仓库根目录的 `render.yaml` 是拓扑模板，不是多客户控制平面。不能让多个客户共享同一 Blueprint 或数据库，也不能把默认 `SRE_WORKSPACE_ID=default` 当作正式交付标识。
 
