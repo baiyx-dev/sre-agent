@@ -8,7 +8,7 @@ SRE Agent 是一个面向服务运维场景的 AI Copilot 项目。
 
 当前版本的能力重点在运维分析、诊断辅助和执行前决策支持；对于 deploy / rollback，系统已经具备策略评估、dry-run、确认和审计能力，但最后一步还没有对接真实发布平台。
 
-产品化路线见 [PRODUCTIZATION_ROADMAP.md](docs/PRODUCTIZATION_ROADMAP.md)，开源参考见 [OPEN_SOURCE_REFERENCE_ANALYSIS.md](docs/OPEN_SOURCE_REFERENCE_ANALYSIS.md)，首个客户交付按 [PILOT_LAUNCH_CHECKLIST.md](docs/PILOT_LAUNCH_CHECKLIST.md) 验收，价值证据按 [PILOT_VALUE_REPORTING.md](docs/PILOT_VALUE_REPORTING.md) 记录和导出。
+产品化路线见 [PRODUCTIZATION_ROADMAP.md](docs/PRODUCTIZATION_ROADMAP.md)，开源参考见 [OPEN_SOURCE_REFERENCE_ANALYSIS.md](docs/OPEN_SOURCE_REFERENCE_ANALYSIS.md)，每客户配置按 [TRIAL_DELIVERY.md](docs/TRIAL_DELIVERY.md) 生成，首个客户交付按 [PILOT_LAUNCH_CHECKLIST.md](docs/PILOT_LAUNCH_CHECKLIST.md) 验收，价值证据按 [PILOT_VALUE_REPORTING.md](docs/PILOT_VALUE_REPORTING.md) 记录和导出。
 
 进程级烟测和当前并发数据见 [PERFORMANCE_BASELINE.md](docs/PERFORMANCE_BASELINE.md)。
 
@@ -393,7 +393,7 @@ docker compose up --build
 
 生产镜像以非 root 用户运行，并使用 `/health/ready` 作为容器健康检查。`compose.yaml` 中关闭认证和执行保护的配置只适用于本机演示；Web 和 Worker 通过 PostgreSQL 共享变更队列，端口默认只绑定 `127.0.0.1`。
 
-要运行带生产门禁的本地免费试用栈，先生成不提交到 Git 的随机密钥，再叠加 `compose.trial.yaml`；完整命令、一次性领取验收和数据保留说明见 [本地生产模式免费试用部署](docs/LOCAL_TRIAL_DEPLOYMENT.md)。
+要运行带生产门禁的本地免费试用栈，先生成不提交到 Git 的随机密钥，再叠加 `compose.trial.yaml`；完整命令、一次性领取验收和数据保留说明见 [本地生产模式免费试用部署](docs/LOCAL_TRIAL_DEPLOYMENT.md)。真实客户必须使用[每客户独立试用交付包](docs/TRIAL_DELIVERY.md)，不要复用默认工作区、Compose 项目名或密钥文件。
 
 单节点试点的备份、恢复和队列 Worker 操作见 [运维手册](docs/OPERATIONS_RUNBOOK.md)。
 
@@ -416,14 +416,20 @@ docker compose up --build
 
 ### 3. 配置环境变量
 
-建议至少配置：
+自助免费试用必须为每个客户单独配置：
+
+- `SRE_WORKSPACE_ID`、`SRE_WORKSPACE_NAME`
+- `SRE_ADMIN_API_KEY`
+- `SRE_TRIAL_ACTIVATION_TOKEN`
+- `SRE_UPGRADE_CONTACT_URL`
+- `EXECUTION_GUARD_TOKEN`
+- 至少一个客户数据源或精确的 `SRE_OUTBOUND_HOST_ALLOWLIST`
+
+可选配置：
 
 - `DEEPSEEK_API_KEY`
 - `DEEPSEEK_API_BASE`
 - `DEEPSEEK_MODEL`
-
-可选配置：
-
 - `SRE_DATA_API_BASE`
 - `SRE_DATA_API_TOKEN`
 - `PROMETHEUS_BASE_URL`
@@ -433,13 +439,12 @@ docker compose up --build
 - `K8S_API_BASE`
 - `K8S_API_TOKEN`
 - `EXECUTION_GUARD_ENABLED`
-- `EXECUTION_GUARD_TOKEN`
 
 说明：
 
-- `render.yaml` 会创建 PostgreSQL 并通过 `DATABASE_URL` 注入连接串
+- `render.yaml` 会创建 PostgreSQL 并通过 `DATABASE_URL` 注入连接串；每个客户必须使用独立 Blueprint、数据库和唯一服务名
 - 未设置 `DATABASE_URL` 时才会回退 SQLite；该模式不支持多实例高可用
-- 如果不配置外部观测系统，应用仍可用内置基线数据启动
+- 生产不会灌入内置演示数据；自助 trial 可以先领取再接入，但不可达目标不会完成 onboarding，转为付费前必须验证真实只读数据源
 
 ### 4. 完成部署
 

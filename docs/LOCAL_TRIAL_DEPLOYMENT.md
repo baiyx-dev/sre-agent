@@ -4,6 +4,8 @@
 
 ## 1. 生成本机密钥
 
+只做单机演练时可以使用下面的简化生成器。为真实客户准备独立实例时，必须改用[每客户独立试用交付包](TRIAL_DELIVERY.md)，由它固定工作区 ID、Compose 项目名、密钥指纹和防覆盖边界。
+
 ```powershell
 python scripts/generate_trial_env.py `
   --upgrade-contact-url mailto:sales@example.com
@@ -38,10 +40,9 @@ docker compose `
 以下操作会永久领取该实例，只能用于准备销毁的验收实例，不能对即将交给客户的未领取实例运行：
 
 ```powershell
-$trialConfig = Get-Content .env.trial.local | ConvertFrom-StringData
-$env:SRE_TRIAL_ACTIVATION_TOKEN = $trialConfig.SRE_TRIAL_ACTIVATION_TOKEN
 python scripts/trial_activation_smoke.py `
   --base-url http://127.0.0.1:8000 `
+  --activation-token-file .env.trial.local `
   --confirm-disposable-instance
 ```
 

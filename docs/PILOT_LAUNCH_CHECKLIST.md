@@ -29,6 +29,8 @@
 
 ## 3. 客户实例配置
 
+先按[每客户独立试用交付包](TRIAL_DELIVERY.md)生成并验证客户目录。正式 Compose 启动必须使用清单中的唯一 `compose_project_name`，Render 则必须创建独立 Blueprint、数据库和服务名；不得手工复制其他客户的 env 文件后只修改显示名称。
+
 ```env
 SRE_ENVIRONMENT=production
 DATABASE_URL=postgresql://...

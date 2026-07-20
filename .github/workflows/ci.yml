@@ -151,36 +151,40 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: Generate isolated local trial secrets
-        run: >-
-          python scripts/generate_trial_env.py
-          --output .env.trial.ci
-          --upgrade-contact-url mailto:trial-ci@example.invalid
+      - name: Generate and verify an isolated customer trial delivery
+        run: |
+          python scripts/prepare_trial_delivery.py create \
+            --workspace-id ci-trial \
+            --workspace-name "CI trial" \
+            --upgrade-contact-url mailto:trial-ci@example.invalid
+          python scripts/prepare_trial_delivery.py verify \
+            --delivery-dir .trial-deliveries/ci-trial
       - name: Validate local trial Compose configuration
         run: >-
           docker compose
-          --env-file .env.trial.ci
+          --project-name sre-trial-ci-trial
+          --env-file .trial-deliveries/ci-trial/.env.trial.local
           -f compose.yaml
           -f compose.trial.yaml
           config --quiet
       - name: Start and verify the production-mode local trial stack
         run: |
           docker compose \
-            --env-file .env.trial.ci \
+            --project-name sre-trial-ci-trial \
+            --env-file .trial-deliveries/ci-trial/.env.trial.local \
             -f compose.yaml \
             -f compose.trial.yaml \
             up --build --detach --wait --wait-timeout 180
-          set -a
-          source .env.trial.ci
-          set +a
           python scripts/trial_activation_smoke.py \
             --base-url http://127.0.0.1:8000 \
+            --activation-token-file .trial-deliveries/ci-trial/.env.trial.local \
             --confirm-disposable-instance
       - name: Show local trial logs on failure
         if: failure()
         run: >-
           docker compose
-          --env-file .env.trial.ci
+          --project-name sre-trial-ci-trial
+          --env-file .trial-deliveries/ci-trial/.env.trial.local
           -f compose.yaml
           -f compose.trial.yaml
           logs --no-color
@@ -188,7 +192,8 @@ jobs:
         if: always()
         run: >-
           docker compose
-          --env-file .env.trial.ci
+          --project-name sre-trial-ci-trial
+          --env-file .trial-deliveries/ci-trial/.env.trial.local
           -f compose.yaml
           -f compose.trial.yaml
           down --volumes --remove-orphans

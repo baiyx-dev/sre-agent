@@ -2,6 +2,8 @@
 
 当前免费试用采用“每个试用客户一个独立部署、一个工作区”的隔离方式，不允许多个互不信任客户共享实例。收费套餐、订阅门禁、用量计量和账单底稿已经保留，但真实支付与自动开票后置；现阶段通过人工联系完成升级。
 
+运营方为真实客户创建实例前，必须先按[每客户独立试用交付包](TRIAL_DELIVERY.md)生成并验证客户专属工作区、密钥和 Compose 隔离名；不得复制其他客户的完整 env 文件。
+
 ## 两种试用起始方式
 
 - `SRE_TRIAL_START_MODE=deployment`：数据库首次初始化即开始计时，兼容已有部署。
@@ -51,8 +53,10 @@ SRE_UPGRADE_CONTACT_URL=mailto:sales@example.com
 对尚未交付、允许被永久领取的全新测试实例执行：
 
 ```powershell
-$env:SRE_TRIAL_ACTIVATION_TOKEN="<该测试实例的激活令牌>"
-python scripts/trial_activation_smoke.py --base-url https://trial.example.com --confirm-disposable-instance
+python scripts/trial_activation_smoke.py `
+  --base-url https://trial.example.com `
+  --activation-token-file .trial-deliveries/<workspace-id>/.env.trial.local `
+  --confirm-disposable-instance
 ```
 
 该脚本会真实领取实例，验证领取前后 readiness、公开状态、匿名拒绝、一次性 admin Key、重复领取冲突、反馈幂等和转化指标，因此绝不能对已经分配给客户或需要保留未领取状态的实例运行。脚本不会打印激活令牌或签发的 API Key。常规已领取实例继续使用 `scripts/smoke_test.py` 验收。

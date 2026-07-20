@@ -4,6 +4,7 @@ from pathlib import Path
 
 from scripts.generate_trial_env import (
     generate_trial_environment,
+    read_trial_environment,
     validate_upgrade_contact_url,
     write_trial_environment,
 )
@@ -49,6 +50,8 @@ class TrialEnvironmentTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 validate_upgrade_contact_url(invalid)
+        with self.assertRaisesRegex(ValueError, "unsafe dotenv"):
+            validate_upgrade_contact_url("https://example.com/upgrade?$HOME")
 
     def test_generation_rejects_invalid_trial_days_and_port(self):
         with self.assertRaises(ValueError):
@@ -83,6 +86,37 @@ class TrialEnvironmentTests(unittest.TestCase):
             updated = output.read_text(encoding="utf-8")
             self.assertIn(rotated["SRE_ADMIN_API_KEY"], updated)
             self.assertNotIn(values["SRE_ADMIN_API_KEY"], updated)
+
+    def test_env_file_round_trips_a_human_workspace_name(self):
+        values = generate_trial_environment(
+            upgrade_contact_url="mailto:sales@example.com",
+            workspace_id="customer-a",
+            workspace_name="客户 A #1",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / ".env.trial.local"
+            write_trial_environment(output, values)
+
+            self.assertEqual(read_trial_environment(output), values)
+            self.assertIn(
+                'SRE_WORKSPACE_NAME="客户 A #1"',
+                output.read_text(encoding="utf-8"),
+            )
+
+    def test_env_reader_rejects_duplicate_keys(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / ".env.trial.local"
+            output.write_text(
+                "SRE_HTTP_PORT=8000\nSRE_HTTP_PORT=9000\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "duplicate trial environment key"):
+                read_trial_environment(output)
+
+            output.write_text("lowercase=value\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "invalid trial environment line"):
+                read_trial_environment(output)
 
 
 if __name__ == "__main__":

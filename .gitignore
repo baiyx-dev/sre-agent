@@ -1,5 +1,6 @@
 .env
 .env.*.local
+.trial-deliveries/
 .venv/
 .idea/
 __pycache__/

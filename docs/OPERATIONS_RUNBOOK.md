@@ -117,6 +117,6 @@ python -m backend.maintenance purge --apply --confirm PURGE:<workspace-id>
 
 ## Render 托管拓扑
 
-`render.yaml` 是生产最低拓扑：Starter Web、Starter Background Worker 和 Basic PostgreSQL。Web 在每次部署前执行受锁保护的 schema migration，CI 全绿后才自动部署；Web 与 Worker 共用 PostgreSQL，Worker 从 Web 服务引用同一套执行器 URL、Token、allowlist 和生产写开关。首次创建自助试用 Blueprint 时必须填写唯一的 `SRE_TRIAL_ACTIVATION_TOKEN`、至少 32 位的 `SRE_ADMIN_API_KEY`、有效的 `SRE_UPGRADE_CONTACT_URL` 和 `EXECUTION_GUARD_TOKEN`。试用 onboarding 阶段允许稍后接入真实只读数据源，但转为付费试点前必须配置并验证数据源，否则 readiness 会按设计拒绝上线。
+`render.yaml` 是生产最低拓扑：Starter Web、Starter Background Worker 和 Basic PostgreSQL。Web 在每次部署前执行受锁保护的 schema migration，CI 全绿后才自动部署；Web 与 Worker 共用 PostgreSQL，Worker 从 Web 服务引用同一套执行器 URL、Token、allowlist 和生产写开关。首次创建自助试用 Blueprint 前先按[每客户独立试用交付包](TRIAL_DELIVERY.md)生成并验证客户配置，再填写唯一的工作区 ID/名称、`SRE_TRIAL_ACTIVATION_TOKEN`、至少 32 位的 `SRE_ADMIN_API_KEY`、有效的 `SRE_UPGRADE_CONTACT_URL` 和 `EXECUTION_GUARD_TOKEN`。每个客户必须使用独立 Blueprint、服务名和 PostgreSQL；Render 自行提供 `DATABASE_URL`，不使用交付包中仅供本地 Compose 的 PostgreSQL 密码。试用 onboarding 阶段允许稍后接入真实只读数据源，但转为付费试点前必须配置并验证数据源，否则 readiness 会按设计拒绝上线。
 
 Free Render Web 会休眠，Free PostgreSQL 会到期且没有备份，Background Worker 也不支持 Free 实例，因此 Free 资源只允许临时演示，不能替换该生产拓扑。启用真实写操作时必须同时核对 Web readiness、Worker 日志和真实执行器幂等验证。

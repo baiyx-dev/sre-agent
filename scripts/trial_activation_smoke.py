@@ -3,10 +3,13 @@ import json
 import os
 import sys
 import uuid
+from pathlib import Path
 
 try:
+    from scripts.generate_trial_env import read_trial_environment
     from scripts.smoke_test import call, require
 except ModuleNotFoundError:
+    from generate_trial_env import read_trial_environment
     from smoke_test import call, require
 
 
@@ -15,10 +18,18 @@ def main() -> None:
         description="Destructive end-to-end smoke test for an unclaimed trial instance"
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8001")
-    parser.add_argument(
+    token_source = parser.add_mutually_exclusive_group()
+    token_source.add_argument(
         "--activation-token-env",
         default="SRE_TRIAL_ACTIVATION_TOKEN",
         help="Environment variable containing the activation token",
+    )
+    token_source.add_argument(
+        "--activation-token-file",
+        help=(
+            "Dotenv file containing SRE_TRIAL_ACTIVATION_TOKEN; "
+            "read as data, not shell code"
+        ),
     )
     parser.add_argument(
         "--confirm-disposable-instance",
@@ -31,10 +42,17 @@ def main() -> None:
         args.confirm_disposable_instance,
         "refusing to claim an instance without --confirm-disposable-instance",
     )
-    activation_token = os.getenv(args.activation_token_env, "").strip()
+    if args.activation_token_file:
+        activation_token = read_trial_environment(
+            Path(args.activation_token_file)
+        ).get("SRE_TRIAL_ACTIVATION_TOKEN", "").strip()
+        activation_token_source = "SRE_TRIAL_ACTIVATION_TOKEN in activation token file"
+    else:
+        activation_token = os.getenv(args.activation_token_env, "").strip()
+        activation_token_source = args.activation_token_env
     require(
         len(activation_token) >= 32,
-        f"{args.activation_token_env} must contain at least 32 characters",
+        f"{activation_token_source} must contain at least 32 characters",
     )
 
     checks: list[str] = []
