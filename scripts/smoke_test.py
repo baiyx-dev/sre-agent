@@ -82,6 +82,18 @@ def main() -> None:
     require(identity_status == 200 and identity.get("role") == "admin", "admin identity failed")
     checks.append("admin_identity")
 
+    subscription_status, subscription, _ = call(
+        args.base_url,
+        "/billing/subscription",
+        api_key=args.api_key,
+    )
+    subscription_state = subscription.get("subscription", {})
+    require(
+        subscription_status == 200 and subscription_state.get("access_allowed") is True,
+        f"subscription access failed: {subscription}",
+    )
+    checks.append("subscription_access")
+
     services_status, services, _ = call(args.base_url, "/services/", api_key=args.api_key)
     require(services_status == 200 and isinstance(services.get("services"), list), "services failed")
     checks.append("services")

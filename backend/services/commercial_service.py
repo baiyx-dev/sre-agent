@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import math
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -10,6 +11,14 @@ from backend.storage.db import configured_workspace_id, get_conn, is_postgres_da
 
 VALID_ROLES = {"viewer", "operator", "admin"}
 VALID_PLANS = {"trial", "starter", "team", "enterprise"}
+VALID_SUBSCRIPTION_STATUSES = {
+    "trialing",
+    "active",
+    "past_due",
+    "suspended",
+    "canceled",
+    "expired",
+}
 PLAN_ENTITLEMENTS = {
     "trial": {"production_writes": False, "max_workspace_api_keys": 3},
     "starter": {"production_writes": False, "max_workspace_api_keys": 10},
@@ -72,6 +81,143 @@ def get_plan_entitlements(plan: str | None = None) -> dict:
     return {"plan": selected_plan, **PLAN_ENTITLEMENTS[selected_plan]}
 
 
+def _parse_utc_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def get_subscription_status(
+    workspace_id: str | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    selected_id = workspace_id or configured_workspace_id()
+    workspace = get_workspace(selected_id)
+    if not workspace or selected_id != configured_workspace_id():
+        raise ValueError("unknown workspace")
+    current = now or _utc_now()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    plan = str(workspace.get("plan") or "trial").lower()
+    configured_status = str(
+        workspace.get("subscription_status")
+        or ("trialing" if plan == "trial" else "active")
+    ).lower()
+    trial_end = _parse_utc_datetime(workspace.get("trial_ends_at"))
+    period_end = _parse_utc_datetime(workspace.get("current_period_end"))
+    access_allowed = False
+    effective_status = configured_status
+    blocking_reason = None
+    access_end = None
+
+    if workspace.get("status") != "active":
+        effective_status = "workspace_suspended"
+        blocking_reason = "workspace is not active"
+    elif configured_status not in VALID_SUBSCRIPTION_STATUSES:
+        effective_status = "configuration_error"
+        blocking_reason = "subscription status is invalid"
+    elif plan == "trial":
+        access_end = trial_end
+        if configured_status in {"suspended", "canceled", "expired"}:
+            blocking_reason = f"trial is {configured_status}"
+        elif configured_status not in {"trialing", "active"}:
+            effective_status = "configuration_error"
+            blocking_reason = f"status {configured_status} is invalid for a trial plan"
+        elif not trial_end:
+            effective_status = "configuration_error"
+            blocking_reason = "trial end is not configured"
+        elif current >= trial_end:
+            effective_status = "expired"
+            blocking_reason = "trial has expired"
+        else:
+            effective_status = "trialing"
+            access_allowed = True
+    elif configured_status in {"trialing", "expired"}:
+        effective_status = "configuration_error"
+        blocking_reason = f"status {configured_status} is invalid for a paid plan"
+    elif configured_status == "active":
+        access_allowed = True
+        access_end = period_end
+    elif configured_status in {"past_due", "canceled"} and period_end and current < period_end:
+        effective_status = "grace_period" if configured_status == "past_due" else "canceling"
+        access_allowed = True
+        access_end = period_end
+    else:
+        access_end = period_end
+        blocking_reason = f"subscription is {configured_status}"
+
+    seconds_remaining = (
+        max(0.0, (access_end - current).total_seconds()) if access_end else None
+    )
+    return {
+        "workspace_id": selected_id,
+        "plan": plan,
+        "configured_status": configured_status,
+        "effective_status": effective_status,
+        "access_allowed": access_allowed,
+        "upgrade_required": not access_allowed,
+        "blocking_reason": blocking_reason,
+        "trial_ends_at": workspace.get("trial_ends_at"),
+        "current_period_end": workspace.get("current_period_end"),
+        "access_ends_at": access_end.isoformat() if access_end else None,
+        "days_remaining": math.ceil(seconds_remaining / 86400)
+        if seconds_remaining is not None
+        else None,
+        "subscription_updated_at": workspace.get("subscription_updated_at"),
+    }
+
+
+def list_subscription_events(
+    workspace_id: str | None = None,
+    *,
+    limit: int = 100,
+) -> list[dict]:
+    selected_id = workspace_id or configured_workspace_id()
+    if selected_id != configured_workspace_id():
+        raise ValueError("unknown workspace")
+    safe_limit = max(1, min(int(limit), 1000))
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, workspace_id, previous_state_json, new_state_json,
+               actor, reason, created_at
+        FROM subscription_events
+        WHERE workspace_id = ?
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (selected_id, safe_limit),
+    )
+    events = []
+    for row in cur.fetchall():
+        item = dict(row)
+        for source, target in (
+            ("previous_state_json", "previous_state"),
+            ("new_state_json", "new_state"),
+        ):
+            raw = item.pop(source, None)
+            item[target] = json.loads(raw) if raw else None
+        events.append(item)
+    conn.close()
+    return events
+
+
+def workspace_subscription_access_allowed(workspace_id: str | None = None) -> bool:
+    try:
+        return bool(get_subscription_status(workspace_id)["access_allowed"])
+    except Exception:
+        return False
+
+
 def production_write_entitled() -> bool:
     try:
         return bool(get_plan_entitlements()["production_writes"])
@@ -84,6 +230,13 @@ def workspace_configuration_status() -> dict:
         workspace = get_workspace()
     except Exception:
         workspace = None
+    try:
+        subscription = get_subscription_status((workspace or {}).get("id"))
+    except Exception:
+        subscription = {
+            "effective_status": "unavailable",
+            "access_allowed": False,
+        }
     return {
         "configured": bool(workspace),
         "workspace_id": (workspace or {}).get("id"),
@@ -91,6 +244,7 @@ def workspace_configuration_status() -> dict:
         "active": (workspace or {}).get("status") == "active",
         "monthly_request_limit": (workspace or {}).get("monthly_request_limit"),
         "entitlements": get_plan_entitlements((workspace or {}).get("plan")),
+        "subscription": subscription,
     }
 
 
@@ -357,6 +511,7 @@ def get_usage_summary(workspace_id: str | None = None, month: str | None = None)
         "requests_remaining": None if limit == 0 else max(0, limit - used),
         "limit_reached": bool(limit and used >= limit),
         "entitlements": get_plan_entitlements(workspace["plan"]),
+        "subscription": get_subscription_status(selected_id),
     }
 
 

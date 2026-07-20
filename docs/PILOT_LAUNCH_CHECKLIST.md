@@ -43,6 +43,10 @@ SRE_WORKSPACE_ID=<customer-slug>
 SRE_WORKSPACE_NAME=<customer-name>
 SRE_PLAN=team
 SRE_MONTHLY_REQUEST_LIMIT=100000
+SRE_SUBSCRIPTION_STATUS=active
+SRE_TRIAL_DAYS=14
+SRE_TRIAL_ENDS_AT=
+SRE_CURRENT_PERIOD_END=
 
 SRE_CHANGE_EXECUTION_MODE=queued
 SRE_CHANGE_EXECUTOR=simulation
@@ -65,6 +69,7 @@ SRE_PRODUCTION_WRITE_ENABLED=false
 10. `/audit/verify` 在正常、保留清理 checkpoint 和恢复场景均为 true；隔离篡改一条审计后必须变为 false。
 11. 重放同一个 `/billing/pilot-outcomes` 幂等键不会重复计数，修改载荷重放返回 409。
 12. `/billing/value-report` 与 CSV 中的节省时间、支持工时、模型成本和毛利可从原始证据复算。
+13. `/billing/subscription` 显示合同对应状态；试用到期后业务 API 返回 402，而账单、价值报告和监控仍可导出。
 
 ## 5. 价值与单位经济性
 

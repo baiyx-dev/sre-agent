@@ -23,6 +23,7 @@ def prometheus_metrics():
     workers = metrics["change_workers"]
     incidents = metrics["incidents"]
     commercial_usage = metrics["commercial_usage"]
+    subscription = commercial_usage["subscription"]
     lines = [
         "# HELP sre_agent_request_total Total number of handled HTTP requests.",
         "# TYPE sre_agent_request_total counter",
@@ -66,5 +67,8 @@ def prometheus_metrics():
         "# HELP sre_agent_llm_cost_usd_micros Estimated LLM cost in USD micros for the current UTC month.",
         "# TYPE sre_agent_llm_cost_usd_micros gauge",
         f'sre_agent_llm_cost_usd_micros{{plan="{commercial_usage["plan"]}"}} {commercial_usage["llm_cost_usd_micros"]}',
+        "# HELP sre_agent_subscription_access Subscription access state; one means operational APIs are enabled.",
+        "# TYPE sre_agent_subscription_access gauge",
+        f'sre_agent_subscription_access{{plan="{commercial_usage["plan"]}",status="{subscription["effective_status"]}"}} {1 if subscription["access_allowed"] else 0}',
     ]
     return "\n".join(lines) + "\n"

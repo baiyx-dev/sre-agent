@@ -60,6 +60,14 @@ Worker 使用原子领取和租约恢复。只有执行器支持幂等键时才�
 
 当前版本的安全边界是每客户独立部署、每实例单工作区。不要在同一实例中接入多个互不信任客户。
 
+## 试用、续费与停用
+
+trial 首次初始化时根据 `SRE_TRIAL_DAYS` 固化到期时间，或采用明确的 `SRE_TRIAL_ENDS_AT`；后续重启不会自动顺延。管理员通过 `/billing/subscription` 检查有效状态和配置变更事件。试用到期、订阅暂停或付款宽限期结束后，业务 API 返回 402；`/auth/me`、`/workspace`、监控与 `/billing/*` 保持可用，便于导出证据和恢复订阅。
+
+升级时同时修改 Web 的 `SRE_PLAN`、`SRE_SUBSCRIPTION_STATUS=active` 与 `SRE_MONTHLY_REQUEST_LIMIT` 后重新部署。付款逾期或周期末取消时，把状态设为 `past_due` 或 `canceled`，并用 `SRE_CURRENT_PERIOD_END` 指定 UTC 宽限边界。Web 与 Worker 必须使用完全相同的工作区和订阅配置；`render.yaml` 已通过 `fromService` 强制继承。完整状态语义见 [SUBSCRIPTION_LIFECYCLE.md](SUBSCRIPTION_LIFECYCLE.md)。
+
+环境 Bootstrap Key 仅用于首次创建密钥和账户恢复。生产已有工作区密钥后，Bootstrap Key 不能调用服务、聊天、Incident 或变更业务接口；日常请求必须使用可撤销、可计量的工作区 Key。
+
 模型价格通过 `SRE_LLM_INPUT_COST_PER_MILLION_USD` 和 `SRE_LLM_OUTPUT_COST_PER_MILLION_USD` 配置。每次成功响应会记录输入/输出 token 和当时估算成本；变更价格只影响新事件。管理员每月使用 `/billing/usage.csv?month=YYYY-MM` 导出账单底稿。
 
 ## 数据库升级
@@ -101,7 +109,7 @@ python -m backend.maintenance purge --apply --confirm PURGE:<workspace-id>
 - PostgreSQL 备份应使用托管数据库的 PITR/快照或 `pg_dump`，SQLite maintenance 命令会拒绝在 PostgreSQL 模式下运行。
 - 审计记录已有可校验哈希链、操作者和变更关联，但外部不可变链头归档仍需客户存储或托管审计服务完成。
 - Webhook 执行器必须由对端完成真实发布和健康验证后返回 `verified: true`。
-- 请求计量已经持久化，但尚未接入支付网关、发票系统或不可变账单导出。
+- 试用到期和订阅状态已由服务端执行，但尚未接入支付网关、自动续费、发票系统或加密签名的离线许可证；自托管客户的部署配置仍属于合同和运维控制边界。
 
 ## Render 托管拓扑
 

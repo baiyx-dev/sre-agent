@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from backend.services.commercial_service import (
     authenticate_workspace_api_key,
     count_active_workspace_api_keys,
+    get_subscription_status,
     workspace_request_limit_reached,
 )
 from backend.storage.db import configured_workspace_id
@@ -19,6 +20,52 @@ load_dotenv()
 
 
 _ROLE_LEVELS = {"viewer": 10, "operator": 20, "admin": 30}
+
+
+def _subscription_recovery_path(request: Request) -> bool:
+    path = request.url.path
+    if path in {
+        "/auth/me",
+        "/workspace",
+        "/metrics",
+        "/internal/metrics",
+        "/internal/prometheus",
+    } or path.startswith("/billing/"):
+        return True
+    if path == "/workspace/api-keys" and request.method == "GET":
+        return True
+    return path.startswith("/workspace/api-keys/") and request.method == "DELETE"
+
+
+def _bootstrap_control_plane_path(request: Request) -> bool:
+    return _subscription_recovery_path(request) or request.url.path.startswith(
+        "/workspace/api-keys"
+    )
+
+
+def _enforce_subscription_access(request: Request, principal: "Principal") -> None:
+    if _subscription_recovery_path(request):
+        return
+    try:
+        subscription = get_subscription_status(principal.workspace_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="subscription state is unavailable",
+        ) from exc
+    if subscription["access_allowed"]:
+        return
+    raise HTTPException(
+        status_code=402,
+        detail={
+            "error": "subscription_inactive",
+            "plan": subscription["plan"],
+            "status": subscription["effective_status"],
+            "reason": subscription["blocking_reason"],
+            "trial_ends_at": subscription["trial_ends_at"],
+            "current_period_end": subscription["current_period_end"],
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -113,6 +160,16 @@ def require_role(required_role: str) -> Callable:
                 workspace_id=configured_workspace_id(),
                 auth_source="environment",
             )
+            if (
+                os.getenv("SRE_ENVIRONMENT", "development").strip().lower()
+                == "production"
+                and workspace_key_count > 0
+                and not _bootstrap_control_plane_path(request)
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="bootstrap API keys are limited to account recovery in production; use a workspace API key",
+                )
         else:
             workspace_key = authenticate_workspace_api_key(provided)
             if not workspace_key:
@@ -134,9 +191,10 @@ def require_role(required_role: str) -> Callable:
                 workspace_id=workspace_key["workspace_id"],
                 auth_source="workspace_api_key",
             )
+        request.state.principal = principal
+        _enforce_subscription_access(request, principal)
         if _ROLE_LEVELS[role] < _ROLE_LEVELS[required_role]:
             raise HTTPException(status_code=403, detail=f"{required_role} role is required")
-        request.state.principal = principal
         return principal
 
     return dependency

@@ -103,6 +103,8 @@ def readiness(response: Response):
         "change_worker": change_execution_mode != "queued"
         or worker_heartbeat["healthy"],
         "workspace": workspace["configured"] and workspace["active"],
+        "subscription_configuration": workspace["subscription"]["effective_status"]
+        not in {"configuration_error", "unavailable"},
         "logging": log_configuration["valid"],
         "real_data_source": (not require_real_data_source)
         or data_sources["has_real_data_source"],
@@ -133,6 +135,9 @@ def readiness(response: Response):
             "latest_worker": worker_heartbeat["latest_worker"],
             "workspace_id": workspace["workspace_id"],
             "workspace_plan": workspace["plan"],
+            "subscription_status": workspace["subscription"]["effective_status"],
+            "subscription_access_allowed": workspace["subscription"]["access_allowed"],
+            "subscription_access_ends_at": workspace["subscription"].get("access_ends_at"),
             "log_format": log_configuration["format"],
             "log_level": log_configuration["level"],
             "require_real_data_source": require_real_data_source,

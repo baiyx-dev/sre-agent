@@ -52,6 +52,14 @@ services:
         value: trial
       - key: SRE_MONTHLY_REQUEST_LIMIT
         value: "1000"
+      - key: SRE_SUBSCRIPTION_STATUS
+        value: trialing
+      - key: SRE_TRIAL_DAYS
+        value: "14"
+      - key: SRE_TRIAL_ENDS_AT
+        sync: false
+      - key: SRE_CURRENT_PERIOD_END
+        sync: false
       - key: EXECUTION_GUARD_ENABLED
         value: "true"
       - key: EXECUTION_GUARD_TOKEN
@@ -100,6 +108,46 @@ services:
         value: "10"
       - key: SRE_WORKER_HEARTBEAT_MAX_AGE_SECONDS
         value: "90"
+      - key: SRE_WORKSPACE_ID
+        fromService:
+          name: sre-agent
+          type: web
+          envVarKey: SRE_WORKSPACE_ID
+      - key: SRE_WORKSPACE_NAME
+        fromService:
+          name: sre-agent
+          type: web
+          envVarKey: SRE_WORKSPACE_NAME
+      - key: SRE_PLAN
+        fromService:
+          name: sre-agent
+          type: web
+          envVarKey: SRE_PLAN
+      - key: SRE_MONTHLY_REQUEST_LIMIT
+        fromService:
+          name: sre-agent
+          type: web
+          envVarKey: SRE_MONTHLY_REQUEST_LIMIT
+      - key: SRE_SUBSCRIPTION_STATUS
+        fromService:
+          name: sre-agent
+          type: web
+          envVarKey: SRE_SUBSCRIPTION_STATUS
+      - key: SRE_TRIAL_DAYS
+        fromService:
+          name: sre-agent
+          type: web
+          envVarKey: SRE_TRIAL_DAYS
+      - key: SRE_TRIAL_ENDS_AT
+        fromService:
+          name: sre-agent
+          type: web
+          envVarKey: SRE_TRIAL_ENDS_AT
+      - key: SRE_CURRENT_PERIOD_END
+        fromService:
+          name: sre-agent
+          type: web
+          envVarKey: SRE_CURRENT_PERIOD_END
       - key: SRE_CHANGE_EXECUTOR
         fromService:
           name: sre-agent

@@ -293,6 +293,10 @@ SRE_WORKSPACE_ID=default
 SRE_WORKSPACE_NAME=Default workspace
 SRE_PLAN=trial
 SRE_MONTHLY_REQUEST_LIMIT=1000
+SRE_SUBSCRIPTION_STATUS=trialing
+SRE_TRIAL_DAYS=14
+SRE_TRIAL_ENDS_AT=
+SRE_CURRENT_PERIOD_END=
 
 SRE_AUTH_ENABLED=true
 SRE_VIEWER_API_KEY=
@@ -345,7 +349,9 @@ SRE_CHANGE_JOB_MAX_ATTEMPTS=1
 - 生产环境默认 `SRE_REQUIRE_REAL_DATA_SOURCE=true`；至少配置统一 SRE API、Prometheus、Loki、Kubernetes API 或一个受监控目标且地址通过 SSRF 校验，readiness 才会通过
 - `SRE_REQUIRE_REAL_DATA_SOURCE=false` 只用于隔离评估，不能作为付费试点或生产验收依据
 - `SRE_MONTHLY_REQUEST_LIMIT=0` 表示不限请求；trial/starter/team 的建议默认值分别为 1,000/10,000/100,000
+- trial 首次初始化时会固化到期时间，重启不会延期；到期、暂停或超过付款宽限期后，业务 API 返回 402，但身份、工作区、监控、账单和价值报告仍可访问。升级与续费流程见 [SUBSCRIPTION_LIFECYCLE.md](docs/SUBSCRIPTION_LIFECYCLE.md)
 - 套餐权限由服务端强制执行：trial/starter 只允许诊断和 dry-run，team/enterprise 才能在其余生产安全门禁全部通过后执行真实变更；工作区密钥上限依次为 3/10/50/不限
+- 生产环境的 Bootstrap Key 在创建工作区密钥后只允许账户恢复与商业控制面调用，日常业务必须使用可计量的工作区 Key，避免绕过额度
 - 前端只把 API Key 保存在当前浏览器标签页的 `sessionStorage`，关闭标签页后自动清除
 - 数据源 Token 默认只从环境变量、Kubernetes Secret 或外部密钥管理器读取，不会写入 SQLite
 - `SRE_ALLOW_INSECURE_DB_SECRETS=true` 仅供隔离的本地演示；生产环境必须保持 `false`
@@ -562,6 +568,7 @@ payment-service 状态
 - `POST /workspace/api-keys`：创建可撤销的工作区密钥；明文只在本次响应返回
 - `DELETE /workspace/api-keys/{key_id}`：撤销密钥；系统拒绝撤销最后一个工作区管理员密钥
 - `GET /billing/usage`：查询 UTC 自然月的持久化请求用量、额度与剩余额度
+- `GET /billing/subscription`：查询试用/付费状态、剩余天数和配置变更事件
 - `GET /billing/usage.csv?month=YYYY-MM`：管理员导出逐事件用量、token、成本和调用元数据
 - `POST /billing/pilot-outcomes`：管理员按幂等键记录节省时间、建议采纳、结果成功和支持工时
 - `GET /billing/pilot-outcomes`：管理员查询指定月份或日期范围内的原始价值证据

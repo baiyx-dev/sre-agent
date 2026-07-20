@@ -121,6 +121,16 @@ body {
   word-break: break-word;
 }
 
+.subscription-status {
+  margin: 7px 0 0;
+  color: #86efac;
+  font-size: 11px;
+}
+
+.subscription-status.blocked {
+  color: #fca5a5;
+}
+
 .usage-row {
   margin-top: 12px;
   color: #cbd5e1;

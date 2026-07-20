@@ -11,10 +11,12 @@ from backend.security_auth import Principal, principal_subject, require_admin, r
 from backend.services.commercial_service import (
     PlanEntitlementError,
     get_plan_entitlements,
+    get_subscription_status,
     get_usage_summary,
     get_workspace,
     issue_workspace_api_key,
     list_usage_events,
+    list_subscription_events,
     list_workspace_api_keys,
     revoke_workspace_api_key,
 )
@@ -67,8 +69,20 @@ def workspace_detail(principal: Principal = Depends(require_viewer)):
             "status": workspace["status"],
             "monthly_request_limit": workspace["monthly_request_limit"],
             "entitlements": get_plan_entitlements(workspace["plan"]),
+            "subscription": get_subscription_status(principal.workspace_id),
         }
     }
+
+
+@router.get("/billing/subscription")
+def billing_subscription(principal: Principal = Depends(require_viewer)):
+    try:
+        return {
+            "subscription": get_subscription_status(principal.workspace_id),
+            "events": list_subscription_events(principal.workspace_id, limit=100),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/workspace/api-keys")

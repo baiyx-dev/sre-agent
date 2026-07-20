@@ -38,6 +38,7 @@ const connectApiBtnEl = document.getElementById("connectApiBtn");
 const authStatusEl = document.getElementById("authStatus");
 const workspaceNameEl = document.getElementById("workspaceName");
 const workspacePlanEl = document.getElementById("workspacePlan");
+const workspaceSubscriptionEl = document.getElementById("workspaceSubscription");
 const workspaceUsageTextEl = document.getElementById("workspaceUsageText");
 const workspaceUsageBarEl = document.getElementById("workspaceUsageBar");
 const workspaceUsageHintEl = document.getElementById("workspaceUsageHint");
@@ -102,6 +103,26 @@ async function fetchWorkspaceUsage() {
     const percent = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
     workspaceNameEl.textContent = workspace.name || workspace.id || "default";
     if (workspacePlanEl) workspacePlanEl.textContent = workspace.plan || usageData.plan || "-";
+    if (workspaceSubscriptionEl) {
+      const subscription = workspace.subscription || usageData.subscription || {};
+      const statusLabels = {
+        trialing: "试用中",
+        active: "已订阅",
+        grace_period: "付款宽限期",
+        canceling: "将在周期末取消",
+        expired: "试用已到期",
+        past_due: "付款逾期",
+        suspended: "已暂停",
+        canceled: "已取消",
+        configuration_error: "订阅配置异常",
+      };
+      const remaining = Number(subscription.days_remaining);
+      const remainingText = subscription.days_remaining != null && Number.isFinite(remaining) && remaining >= 0
+        ? ` · 剩余 ${remaining} 天`
+        : "";
+      workspaceSubscriptionEl.textContent = `${statusLabels[subscription.effective_status] || subscription.effective_status || "状态未知"}${remainingText}`;
+      workspaceSubscriptionEl.classList.toggle("blocked", subscription.access_allowed === false);
+    }
     workspaceUsageTextEl.textContent = limit > 0
       ? `${used.toLocaleString()} / ${limit.toLocaleString()}`
       : `${used.toLocaleString()} / 不限`;

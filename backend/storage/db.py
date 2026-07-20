@@ -1,10 +1,11 @@
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
 import os
 import re
+import uuid
 
 import sqlite3
 
@@ -22,6 +23,7 @@ MIGRATION_MANIFEST = (
     (6, "tamper_evident_audit_ledger", "2026-07-19-compliance-v6"),
     (7, "worker_heartbeat_readiness", "2026-07-19-reliability-v7"),
     (8, "pilot_value_outcomes", "2026-07-20-commercial-v8"),
+    (9, "subscription_lifecycle", "2026-07-20-commercial-v9"),
 )
 CURRENT_SCHEMA_VERSION = MIGRATION_MANIFEST[-1][0]
 _POSTGRES_MIGRATION_LOCK_ID = 7_361_904_211
@@ -620,10 +622,33 @@ def _initialize_schema(conn, cur):
         name TEXT NOT NULL,
         plan TEXT NOT NULL,
         status TEXT NOT NULL,
+        subscription_status TEXT,
+        trial_ends_at TEXT,
+        current_period_end TEXT,
+        subscription_updated_at TEXT,
         monthly_request_limit INTEGER NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     )
+    """)
+    _safe_add_column("workspaces", "subscription_status", "TEXT")
+    _safe_add_column("workspaces", "trial_ends_at", "TEXT")
+    _safe_add_column("workspaces", "current_period_end", "TEXT")
+    _safe_add_column("workspaces", "subscription_updated_at", "TEXT")
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS subscription_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        previous_state_json TEXT,
+        new_state_json TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_subscription_events_workspace_time
+    ON subscription_events(workspace_id, created_at)
     """)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS workspace_api_keys (
@@ -703,20 +728,141 @@ def _initialize_schema(conn, cur):
         )
     except ValueError:
         request_limit = default_limits.get(workspace_plan, 1000)
-    now = datetime.now(timezone.utc).isoformat()
+    now_value = datetime.now(timezone.utc)
+    now = now_value.isoformat()
+    try:
+        trial_days = int(os.getenv("SRE_TRIAL_DAYS", "14"))
+    except ValueError as exc:
+        raise RuntimeError("SRE_TRIAL_DAYS must be an integer between 1 and 3650") from exc
+    if not 1 <= trial_days <= 3650:
+        raise RuntimeError("SRE_TRIAL_DAYS must be an integer between 1 and 3650")
+
+    def _configured_datetime(name: str) -> tuple[bool, str | None]:
+        raw = os.getenv(name, "").strip()
+        if not raw:
+            return False, None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise RuntimeError(f"{name} must be an ISO-8601 datetime") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return True, parsed.astimezone(timezone.utc).isoformat()
+
+    explicit_trial_end, configured_trial_end = _configured_datetime("SRE_TRIAL_ENDS_AT")
+    explicit_period_end, configured_period_end = _configured_datetime("SRE_CURRENT_PERIOD_END")
+    raw_subscription_status = os.getenv("SRE_SUBSCRIPTION_STATUS", "").strip().lower()
+    valid_subscription_statuses = {
+        "trialing",
+        "active",
+        "past_due",
+        "suspended",
+        "canceled",
+        "expired",
+    }
+    if raw_subscription_status and raw_subscription_status not in valid_subscription_statuses:
+        raise RuntimeError(
+            "SRE_SUBSCRIPTION_STATUS must be trialing, active, past_due, suspended, canceled, or expired"
+        )
+
+    cur.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,))
+    existing_row = cur.fetchone()
+    existing = dict(existing_row) if existing_row else None
+    plan_changed = bool(existing and existing.get("plan") != workspace_plan)
+    default_subscription_status = "trialing" if workspace_plan == "trial" else "active"
+    if raw_subscription_status:
+        subscription_status = raw_subscription_status
+    elif existing and not plan_changed and existing.get("subscription_status"):
+        subscription_status = existing["subscription_status"]
+    else:
+        subscription_status = default_subscription_status
+
+    if workspace_plan == "trial":
+        if explicit_trial_end:
+            trial_ends_at = configured_trial_end
+        elif existing and not plan_changed and existing.get("trial_ends_at"):
+            trial_ends_at = existing["trial_ends_at"]
+        else:
+            trial_ends_at = (now_value + timedelta(days=trial_days)).isoformat()
+    else:
+        trial_ends_at = None
+
+    if explicit_period_end:
+        current_period_end = configured_period_end
+    elif existing and not plan_changed:
+        current_period_end = existing.get("current_period_end")
+    else:
+        current_period_end = None
+
+    new_subscription_state = {
+        "plan": workspace_plan,
+        "subscription_status": subscription_status,
+        "trial_ends_at": trial_ends_at,
+        "current_period_end": current_period_end,
+        "monthly_request_limit": max(0, request_limit),
+    }
+    previous_subscription_state = None
+    if existing:
+        previous_subscription_state = {
+            key: existing.get(key) for key in new_subscription_state
+        }
+    subscription_changed = previous_subscription_state != new_subscription_state
+    subscription_updated_at = (
+        now
+        if subscription_changed
+        else (existing or {}).get("subscription_updated_at") or now
+    )
+
     cur.execute(
         """
         INSERT INTO workspaces (
-            id, name, plan, status, monthly_request_limit, created_at, updated_at
-        ) VALUES (?, ?, ?, 'active', ?, ?, ?)
+            id, name, plan, status, subscription_status, trial_ends_at,
+            current_period_end, subscription_updated_at,
+            monthly_request_limit, created_at, updated_at
+        ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             plan = excluded.plan,
+            subscription_status = excluded.subscription_status,
+            trial_ends_at = excluded.trial_ends_at,
+            current_period_end = excluded.current_period_end,
+            subscription_updated_at = excluded.subscription_updated_at,
             monthly_request_limit = excluded.monthly_request_limit,
             updated_at = excluded.updated_at
         """,
-        (workspace_id, workspace_name, workspace_plan, max(0, request_limit), now, now),
+        (
+            workspace_id,
+            workspace_name,
+            workspace_plan,
+            subscription_status,
+            trial_ends_at,
+            current_period_end,
+            subscription_updated_at,
+            max(0, request_limit),
+            now,
+            now,
+        ),
     )
+    if subscription_changed:
+        cur.execute(
+            """
+            INSERT INTO subscription_events (
+                id, workspace_id, previous_state_json, new_state_json,
+                actor, reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                workspace_id,
+                json.dumps(previous_subscription_state, ensure_ascii=False, sort_keys=True)
+                if previous_subscription_state
+                else None,
+                json.dumps(new_subscription_state, ensure_ascii=False, sort_keys=True),
+                "deployment-configuration",
+                "workspace subscription configuration reconciled",
+                now,
+            ),
+        )
 
 def _ensure_migration_table(cur) -> None:
     cur.execute("""

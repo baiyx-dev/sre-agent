@@ -61,6 +61,8 @@ from backend.services.incident_service import correlate_alerts
 from backend.services.commercial_service import (
     PlanEntitlementError,
     get_plan_entitlements,
+    get_subscription_status,
+    get_workspace,
     issue_workspace_api_key,
     revoke_workspace_api_key,
 )
@@ -926,6 +928,164 @@ class RegressionTests(unittest.TestCase):
             os.environ.pop("SRE_INFRA_COST_USD_MONTHLY", None)
             os.environ.pop("SRE_CUSTOMER_HOURLY_COST_USD", None)
             os.environ.pop("SRE_SUPPORT_HOURLY_COST_USD", None)
+
+    def test_subscription_expiry_blocks_operations_without_blocking_recovery(self):
+        tracked_env = {
+            name: os.environ.get(name)
+            for name in (
+                "SRE_PLAN",
+                "SRE_SUBSCRIPTION_STATUS",
+                "SRE_TRIAL_DAYS",
+                "SRE_TRIAL_ENDS_AT",
+                "SRE_CURRENT_PERIOD_END",
+                "SRE_MONTHLY_REQUEST_LIMIT",
+                "SRE_ENVIRONMENT",
+                "SRE_AUTH_ENABLED",
+                "SRE_ADMIN_API_KEY",
+            )
+        }
+        original_workspace = get_workspace()
+        created_key_id = None
+        try:
+            os.environ["SRE_TRIAL_DAYS"] = "0"
+            with self.assertRaises(RuntimeError):
+                init_db()
+            os.environ["SRE_TRIAL_DAYS"] = "14"
+            os.environ["SRE_PLAN"] = "trial"
+            os.environ["SRE_SUBSCRIPTION_STATUS"] = "trialing"
+            os.environ["SRE_TRIAL_ENDS_AT"] = "2099-01-01T00:00:00Z"
+            os.environ["SRE_MONTHLY_REQUEST_LIMIT"] = "1000"
+            init_db()
+            first_trial_end = get_subscription_status()["trial_ends_at"]
+            os.environ.pop("SRE_TRIAL_ENDS_AT", None)
+            init_db()
+            self.assertEqual(get_subscription_status()["trial_ends_at"], first_trial_end)
+
+            issued = issue_workspace_api_key("subscription-regression", "viewer")
+            created_key_id = issued["id"]
+            workspace_headers = {"Authorization": f"Bearer {issued['api_key']}"}
+            os.environ["SRE_AUTH_ENABLED"] = "true"
+            os.environ["SRE_ADMIN_API_KEY"] = "subscription-bootstrap-admin"
+            bootstrap_headers = {"X-SRE-API-Key": "subscription-bootstrap-admin"}
+
+            with TestClient(app) as client:
+                os.environ["SRE_SUBSCRIPTION_STATUS"] = "expired"
+                os.environ["SRE_TRIAL_ENDS_AT"] = "2025-01-01T00:00:00Z"
+                init_db()
+
+                workspace_denied = client.get("/services/", headers=workspace_headers)
+                self.assertEqual(workspace_denied.status_code, 402)
+                self.assertEqual(
+                    workspace_denied.json()["detail"]["error"],
+                    "subscription_inactive",
+                )
+                bootstrap_denied = client.get("/services/", headers=bootstrap_headers)
+                self.assertEqual(bootstrap_denied.status_code, 402)
+
+                subscription = client.get(
+                    "/billing/subscription",
+                    headers=workspace_headers,
+                )
+                self.assertEqual(subscription.status_code, 200)
+                self.assertEqual(
+                    subscription.json()["subscription"]["effective_status"],
+                    "expired",
+                )
+                self.assertFalse(
+                    subscription.json()["subscription"]["access_allowed"]
+                )
+                self.assertGreaterEqual(len(subscription.json()["events"]), 1)
+                self.assertEqual(
+                    client.get("/workspace", headers=workspace_headers).status_code,
+                    200,
+                )
+                self.assertEqual(
+                    client.get("/billing/usage", headers=workspace_headers).status_code,
+                    200,
+                )
+                self.assertEqual(
+                    client.post(
+                        "/workspace/api-keys",
+                        headers=bootstrap_headers,
+                        json={"name": "blocked-expired-key", "role": "viewer"},
+                    ).status_code,
+                    402,
+                )
+
+                os.environ["SRE_PLAN"] = "team"
+                os.environ["SRE_SUBSCRIPTION_STATUS"] = "active"
+                os.environ.pop("SRE_TRIAL_ENDS_AT", None)
+                os.environ["SRE_MONTHLY_REQUEST_LIMIT"] = "100000"
+                init_db()
+                self.assertEqual(
+                    client.get("/services/", headers=workspace_headers).status_code,
+                    200,
+                )
+
+                os.environ["SRE_SUBSCRIPTION_STATUS"] = "past_due"
+                os.environ["SRE_CURRENT_PERIOD_END"] = "2099-02-01T00:00:00Z"
+                init_db()
+                grace = get_subscription_status()
+                self.assertEqual(grace["effective_status"], "grace_period")
+                self.assertTrue(grace["access_allowed"])
+                self.assertEqual(
+                    client.get("/services/", headers=workspace_headers).status_code,
+                    200,
+                )
+                os.environ["SRE_SUBSCRIPTION_STATUS"] = "active"
+                init_db()
+
+                os.environ["SRE_ENVIRONMENT"] = "production"
+                self.assertEqual(
+                    client.get("/services/", headers=bootstrap_headers).status_code,
+                    403,
+                )
+                self.assertEqual(
+                    client.get(
+                        "/billing/subscription",
+                        headers=bootstrap_headers,
+                    ).status_code,
+                    200,
+                )
+                self.assertEqual(
+                    client.get("/services/", headers=workspace_headers).status_code,
+                    200,
+                )
+        finally:
+            if created_key_id:
+                revoke_workspace_api_key(created_key_id)
+            for name, value in tracked_env.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+            if original_workspace:
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    UPDATE workspaces
+                    SET name = ?, plan = ?, status = ?, subscription_status = ?,
+                        trial_ends_at = ?, current_period_end = ?,
+                        subscription_updated_at = ?, monthly_request_limit = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        original_workspace["name"],
+                        original_workspace["plan"],
+                        original_workspace["status"],
+                        original_workspace.get("subscription_status"),
+                        original_workspace.get("trial_ends_at"),
+                        original_workspace.get("current_period_end"),
+                        original_workspace.get("subscription_updated_at"),
+                        original_workspace["monthly_request_limit"],
+                        original_workspace["updated_at"],
+                        original_workspace["id"],
+                    ),
+                )
+                conn.commit()
+                conn.close()
 
     def test_production_readiness_fails_closed(self):
         os.environ["SRE_ENVIRONMENT"] = "production"
