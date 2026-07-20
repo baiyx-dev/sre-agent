@@ -134,20 +134,23 @@ def require_role(required_role: str) -> Callable:
             request.state.principal = principal
             return principal
 
-        configured = _configured_keys()
-        try:
-            workspace_key_count = count_active_workspace_api_keys()
-        except Exception:
-            workspace_key_count = 0
-        if not configured and not workspace_key_count:
-            raise HTTPException(status_code=503, detail="authentication is enabled but no API keys are configured")
-
         provided = _extract_key(x_sre_api_key, authorization)
         if not provided:
             raise HTTPException(
                 status_code=401,
                 detail="API key is required",
                 headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        configured = _configured_keys()
+        try:
+            workspace_key_count = count_active_workspace_api_keys()
+        except Exception:
+            workspace_key_count = 0
+        if not configured and not workspace_key_count:
+            raise HTTPException(
+                status_code=503,
+                detail="authentication is enabled but no API keys are configured",
             )
 
         matched_roles = [role for role, expected in configured if hmac.compare_digest(provided, expected)]

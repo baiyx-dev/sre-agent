@@ -52,6 +52,7 @@ from backend.storage.repositories import (
     get_change_request,
     get_chat_session_context,
     save_execution_audit,
+    save_task_run,
     touch_worker_heartbeat,
     verify_audit_ledger,
     worker_heartbeat_status,
@@ -761,6 +762,31 @@ class RegressionTests(unittest.TestCase):
         finally:
             os.environ["SRE_AUTH_ENABLED"] = "false"
             os.environ.pop("SRE_VIEWER_API_KEY", None)
+
+    def test_missing_key_is_unauthorized_before_auth_bootstrap_exists(self):
+        os.environ["SRE_AUTH_ENABLED"] = "true"
+        for name in (
+            "SRE_VIEWER_API_KEY",
+            "SRE_OPERATOR_API_KEY",
+            "SRE_ADMIN_API_KEY",
+        ):
+            os.environ.pop(name, None)
+        try:
+            with patch(
+                "backend.security_auth.count_active_workspace_api_keys",
+                return_value=0,
+            ):
+                with TestClient(app) as client:
+                    anonymous = client.get("/services/")
+                    configured_missing = client.get(
+                        "/services/",
+                        headers={"X-SRE-API-Key": "not-yet-issued"},
+                    )
+            self.assertEqual(anonymous.status_code, 401)
+            self.assertEqual(anonymous.headers.get("www-authenticate"), "Bearer")
+            self.assertEqual(configured_missing.status_code, 503)
+        finally:
+            os.environ["SRE_AUTH_ENABLED"] = "false"
 
     def test_w3c_trace_context_is_validated_and_propagated(self):
         trace_id = "1" * 32
@@ -1609,6 +1635,48 @@ class RegressionTests(unittest.TestCase):
                     conn.commit()
                     conn.close()
 
+                    without_evidence = client.get(
+                        "/trial/onboarding",
+                        headers=admin_headers,
+                    )
+                    self.assertEqual(without_evidence.json()["progress_percent"], 40)
+                    self.assertIsNone(without_evidence.json()["first_value_at"])
+                    self.assertEqual(
+                        without_evidence.json()["first_value_evidence_sources"],
+                        0,
+                    )
+
+                    save_task_run(
+                        "trial-api status with evidence",
+                        {
+                            "intent": "status_query",
+                            "final_answer": "healthy",
+                            "steps": [
+                                {
+                                    "action": "get_service_status",
+                                    "result": {"service": "trial-api", "status": "running"},
+                                }
+                            ],
+                        },
+                    )
+                    save_task_run(
+                        "trial-api diagnosis with evidence",
+                        {
+                            "intent": "troubleshoot",
+                            "final_answer": "diagnosed",
+                            "steps": [
+                                {
+                                    "action": "get_service_metrics",
+                                    "result": {"service": "trial-api", "error_rate": 7.5},
+                                },
+                                {
+                                    "action": "get_recent_logs",
+                                    "result": [{"level": "ERROR", "message": "timeout"}],
+                                },
+                            ],
+                        },
+                    )
+
                     before_feedback = client.get(
                         "/trial/onboarding",
                         headers=admin_headers,
@@ -1617,6 +1685,10 @@ class RegressionTests(unittest.TestCase):
                     self.assertIsNotNone(before_feedback.json()["first_value_at"])
                     self.assertIsNotNone(
                         before_feedback.json()["time_to_first_value_minutes"]
+                    )
+                    self.assertEqual(
+                        before_feedback.json()["first_value_evidence_sources"],
+                        2,
                     )
 
                     feedback_payload = {

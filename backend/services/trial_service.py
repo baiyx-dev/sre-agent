@@ -14,6 +14,15 @@ from backend.storage.db import configured_workspace_id, get_conn, is_postgres_da
 
 TRIAL_OUTCOMES = {"not_evaluated", "not_useful", "some_value", "high_value"}
 PURCHASE_INTENTS = {"no", "maybe", "yes"}
+_EVIDENCE_ACTIONS = (
+    "get_service_status",
+    "list_services",
+    "get_service_metrics",
+    "get_recent_logs",
+    "get_recent_alerts",
+    "get_recent_deploy_context",
+    "get_k8s_observability",
+)
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 _PLACEHOLDER_TOKENS = {
     "replace_me",
@@ -455,6 +464,37 @@ def _feedback_from_row(row) -> dict:
     return item
 
 
+def _first_evidence_backed_task(cur, *, intent: str | None = None) -> dict:
+    action_placeholders = ", ".join("?" for _ in _EVIDENCE_ACTIONS)
+    intent_clause = "AND tr.intent = ?" if intent else ""
+    params = [*_EVIDENCE_ACTIONS]
+    if intent:
+        params.append(intent)
+    cur.execute(
+        f"""
+        SELECT tr.id, tr.created_at AS at,
+               COUNT(DISTINCT ts.action) AS evidence_source_count
+        FROM task_runs tr
+        JOIN task_steps ts ON ts.task_run_id = tr.id
+        WHERE ts.action IN ({action_placeholders})
+          AND ts.result_json IS NOT NULL
+          AND TRIM(ts.result_json) NOT IN ('', 'null', '{{}}', '[]')
+          {intent_clause}
+        GROUP BY tr.id, tr.created_at
+        ORDER BY tr.created_at ASC, tr.id ASC
+        LIMIT 1
+        """,
+        tuple(params),
+    )
+    row = cur.fetchone()
+    if not row:
+        return {"id": None, "at": None, "count": 0, "evidence_source_count": 0}
+    item = dict(row)
+    item["count"] = 1
+    item["evidence_source_count"] = int(item.get("evidence_source_count") or 0)
+    return item
+
+
 def trial_onboarding_status(workspace_id: str) -> dict:
     if workspace_id != configured_workspace_id():
         raise TrialError("unknown workspace")
@@ -466,12 +506,8 @@ def trial_onboarding_status(workspace_id: str) -> dict:
     try:
         cur.execute("SELECT MIN(created_at) AS at, COUNT(*) AS count FROM monitored_targets")
         target = cur.fetchone()
-        cur.execute("SELECT MIN(created_at) AS at, COUNT(*) AS count FROM task_runs")
-        first_query = cur.fetchone()
-        cur.execute(
-            "SELECT MIN(created_at) AS at, COUNT(*) AS count FROM task_runs WHERE intent = 'troubleshoot'"
-        )
-        first_diagnosis = cur.fetchone()
+        first_query = _first_evidence_backed_task(cur)
+        first_diagnosis = _first_evidence_backed_task(cur, intent="troubleshoot")
         cur.execute(
             "SELECT MIN(created_at) AS at, COUNT(*) AS count FROM trial_feedback WHERE workspace_id = ?",
             (workspace_id,),
@@ -544,6 +580,9 @@ def trial_onboarding_status(workspace_id: str) -> dict:
         "progress_percent": round(completed * 100 / len(milestones)),
         "next_milestone": next_milestone,
         "first_value_at": first_diagnosis["at"],
+        "first_value_evidence_sources": int(
+            first_diagnosis["evidence_source_count"]
+        ),
         "time_to_first_value_minutes": time_to_first_value_minutes,
         "value_evidence_count": int(value_evidence["count"]),
         "feedback_count": int(feedback["count"]),

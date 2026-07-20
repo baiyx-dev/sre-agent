@@ -570,7 +570,7 @@ payment-service 状态
 
 - `GET /trial/status`：公开查询该独立实例是否可领取，不返回工作区或联系人信息
 - `POST /trial/activate`：使用邀请令牌一次性启动试用并领取首把 admin 工作区 Key
-- `GET /trial/onboarding`：查看接入、首次查询、首次诊断和反馈里程碑
+- `GET /trial/onboarding`：查看接入、有证据的首次查询/诊断、首次价值证据来源数和反馈里程碑
 - `POST /trial/feedback`：幂等提交评分、价值结果、付费意向和缺失能力
 - `GET /trial/conversion-metrics`：管理员查看首次价值时间和试用转化证据
 

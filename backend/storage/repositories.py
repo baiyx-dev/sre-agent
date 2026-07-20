@@ -718,7 +718,7 @@ def list_change_requests(status: str | None = None, limit: int = 100) -> list[di
 def save_task_run(user_message: str, result: dict) -> int:
     conn = get_conn()
     cur = conn.cursor()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = _utc_now().isoformat()
 
     insert_sql = """
         INSERT INTO task_runs (
@@ -775,7 +775,7 @@ def get_app_setting(key: str) -> str | None:
 def set_app_setting(key: str, value: str | None):
     conn = get_conn()
     cur = conn.cursor()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = _utc_now().isoformat()
     cur.execute(
         """
         INSERT INTO app_settings(key, value, updated_at)
@@ -841,7 +841,7 @@ def upsert_chat_session_context(
     existing = get_chat_session_context(session_id) or {}
     conn = get_conn()
     cur = conn.cursor()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = _utc_now().isoformat()
     cur.execute(
         """
         INSERT INTO chat_sessions(
@@ -934,7 +934,7 @@ def get_monitored_target(name: str) -> dict | None:
 def upsert_monitored_target(name: str, base_url: str) -> dict:
     conn = get_conn()
     cur = conn.cursor()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = _utc_now().isoformat()
     cur.execute(
         """
         INSERT INTO monitored_targets(name, base_url, created_at)
@@ -1300,7 +1300,7 @@ def generate_postmortem(task_run_id: int, limit: int = 50) -> dict:
             "logs": log_records[:20],
             "deployments": deployment_records[:10],
         },
-        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at": _utc_now().isoformat(),
     }
 
 

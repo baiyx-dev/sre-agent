@@ -19,7 +19,7 @@
 - 生产未灌入演示服务；`/health/ready` 的 `real_data_source` 为 true，并已实际查询到带时间戳的客户遥测数据。
 - 若开放写操作，Webhook executor 已在测试环境完成幂等、超时、失败和发布后健康验证。
 - 依赖审计、全部回归测试、容器非 root 检查和 PostgreSQL CI 均通过。
-- `scripts/smoke_test.py` 与目标容量参数下的 `scripts/load_smoke.py` 均通过，结果归档并形成客户 SLO 基线。
+- 全新可销毁实例已运行一次 `scripts/trial_activation_smoke.py --confirm-disposable-instance`；已领取实例的 `scripts/smoke_test.py` 与目标容量参数下的 `scripts/load_smoke.py` 均通过，结果归档并形成客户 SLO 基线。
 - 完成一次备份恢复演练，记录实际 RTO/RPO。
 - `/audit/verify` 返回 `valid=true`，当前链头已写入客户侧不可变归档并完成一次恢复后复验。
 
@@ -72,7 +72,7 @@ SRE_PRODUCTION_WRITE_ENABLED=false
 13. `/billing/subscription` 显示合同对应状态；试用到期后业务 API 返回 402，而账单、价值报告和监控仍可导出。
 14. 已结束月份能够预览并幂等定稿；迟到用量不改变已定稿账单，`/verify` 返回 `valid=true`，CSV 与 JSON 金额一致。
 15. 新免费试用实例在领取前为 `pending_activation` 且不消耗试用天数；正确令牌只可领取一次，返回的首把 admin Key 可通过 `/auth/me` 验证。
-16. `/trial/onboarding` 的接入、首次查询、首次诊断和反馈里程碑能从数据库事实复算；反馈幂等重放不重复计数，修改载荷返回 409。
+16. `/trial/onboarding` 的接入、首次查询、首次诊断和反馈里程碑能从数据库事实复算；无证据查询或排障不能完成首次查询/首次价值，反馈幂等重放不重复计数，修改载荷返回 409。
 
 ## 5. 价值与单位经济性
 

@@ -30,7 +30,7 @@ jobs:
       - name: Verify dependency environment
         run: python -m pip check
       - name: Compile Python
-        run: python -m compileall -q backend tests
+        run: python -m compileall -q backend tests scripts
       - name: Upgrade and verify SQLite schema
         run: |
           python -m backend.migrations upgrade
@@ -58,6 +58,27 @@ jobs:
           done
           python scripts/smoke_test.py --api-key ci-admin-key
           python scripts/load_smoke.py --api-key ci-admin-key --requests 100 --concurrency 10 --max-p95-ms 1000
+      - name: Self-service trial activation smoke
+        env:
+          SRE_AGENT_DB_PATH: /tmp/sre-agent-trial-smoke.db
+          SRE_AUTH_ENABLED: "true"
+          SRE_PLAN: trial
+          SRE_SUBSCRIPTION_STATUS: trialing
+          SRE_TRIAL_START_MODE: activation
+          SRE_TRIAL_SELF_SERVICE_ENABLED: "true"
+          SRE_TRIAL_ACTIVATION_TOKEN: ci-trial-activation-token-0000000000000001
+          SRE_TRIAL_DAYS: "14"
+          SRE_CHANGE_EXECUTION_MODE: synchronous
+          EXECUTION_GUARD_ENABLED: "false"
+        run: |
+          python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001 > /tmp/sre-agent-trial.log 2>&1 &
+          trial_server_pid=$!
+          trap 'kill "$trial_server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:8001/health/ready >/dev/null && break
+            sleep 1
+          done
+          python scripts/trial_activation_smoke.py --confirm-disposable-instance
 
   dependency-audit:
     runs-on: ubuntu-latest

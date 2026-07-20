@@ -38,11 +38,22 @@ SRE_UPGRADE_CONTACT_URL=mailto:sales@example.com
 
 1. 激活免费试用。
 2. 配置一个监测目标。
-3. 完成首次状态查询。
-4. 完成首次故障诊断；该时间作为 first value。
+3. 完成首次有数据证据的状态查询。
+4. 完成首次有数据证据的故障诊断；该时间作为 first value。
 5. 提交试用反馈。
 
-响应同时给出完成比例、下一步、首次价值时间和从激活到首次价值的分钟数。前端直接展示该清单，不依赖浏览器本地标记来伪造完成状态。
+响应同时给出完成比例、下一步、首次价值时间、诊断证据来源数和从激活到首次价值的分钟数。仅发起查询、进入澄清流程或对不存在的服务执行无证据排障不会完成里程碑。前端直接展示该清单，不依赖浏览器本地标记来伪造完成状态。
+
+## 部署后一次性验收
+
+对尚未交付、允许被永久领取的全新测试实例执行：
+
+```powershell
+$env:SRE_TRIAL_ACTIVATION_TOKEN="<该测试实例的激活令牌>"
+python scripts/trial_activation_smoke.py --base-url https://trial.example.com --confirm-disposable-instance
+```
+
+该脚本会真实领取实例，验证领取前后 readiness、公开状态、匿名拒绝、一次性 admin Key、重复领取冲突、反馈幂等和转化指标，因此绝不能对已经分配给客户或需要保留未领取状态的实例运行。脚本不会打印激活令牌或签发的 API Key。常规已领取实例继续使用 `scripts/smoke_test.py` 验收。
 
 ## 反馈与升级
 
