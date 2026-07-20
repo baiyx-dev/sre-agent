@@ -123,6 +123,10 @@ class RegressionTests(unittest.TestCase):
         os.environ.pop("SRE_CHANGE_EXECUTOR_TOKEN", None)
         os.environ.pop("SRE_CHANGE_EXECUTION_MODE", None)
         os.environ.pop("SRE_CHANGE_JOB_MAX_ATTEMPTS", None)
+        os.environ.pop("SRE_PLAN_PRICE_USD_MONTHLY", None)
+        os.environ.pop("SRE_INFRA_COST_USD_MONTHLY", None)
+        os.environ.pop("SRE_CUSTOMER_HOURLY_COST_USD", None)
+        os.environ.pop("SRE_SUPPORT_HOURLY_COST_USD", None)
         os.environ["SRE_OUTBOUND_HOST_ALLOWLIST"] = "prom.example.com,loki.example.com,k8s.example.com,executor.example.com"
         os.environ.pop("SRE_ALLOW_PRIVATE_NETWORK_TARGETS", None)
         self.external_source_patchers = [
@@ -819,6 +823,109 @@ class RegressionTests(unittest.TestCase):
                 revoke_workspace_api_key(created_key_id)
             os.environ["SRE_AUTH_ENABLED"] = "false"
             os.environ.pop("SRE_ADMIN_API_KEY", None)
+
+    def test_pilot_value_report_is_idempotent_and_admin_only(self):
+        os.environ["SRE_AUTH_ENABLED"] = "true"
+        os.environ["SRE_ADMIN_API_KEY"] = "pilot-report-admin"
+        os.environ["SRE_VIEWER_API_KEY"] = "pilot-report-viewer"
+        os.environ["SRE_PLAN_PRICE_USD_MONTHLY"] = "1000"
+        os.environ["SRE_INFRA_COST_USD_MONTHLY"] = "100"
+        os.environ["SRE_CUSTOMER_HOURLY_COST_USD"] = "100"
+        os.environ["SRE_SUPPORT_HOURLY_COST_USD"] = "50"
+        admin_headers = {"X-SRE-API-Key": "pilot-report-admin"}
+        viewer_headers = {"X-SRE-API-Key": "pilot-report-viewer"}
+        payload = {
+            "idempotency_key": "regression-pilot-value-v1",
+            "category": "diagnosis",
+            "service_name": "payment-service",
+            "baseline_minutes": 120,
+            "actual_minutes": 30,
+            "support_minutes": 15,
+            "recommendation_accepted": True,
+            "successful": True,
+            "notes": "Regression fixture for the paid-pilot evidence loop.",
+            "occurred_at": "2025-01-15T12:00:00+00:00",
+        }
+        try:
+            with TestClient(app) as client:
+                created = client.post(
+                    "/billing/pilot-outcomes",
+                    headers=admin_headers,
+                    json=payload,
+                )
+                self.assertEqual(created.status_code, 201)
+                outcome_id = created.json()["outcome"]["id"]
+
+                replay = client.post(
+                    "/billing/pilot-outcomes",
+                    headers=admin_headers,
+                    json=payload,
+                )
+                self.assertEqual(replay.status_code, 201)
+                self.assertFalse(replay.json()["created"])
+                self.assertTrue(replay.json()["idempotent_replay"])
+                self.assertEqual(replay.json()["outcome"]["id"], outcome_id)
+
+                conflicting_payload = dict(payload, actual_minutes=31)
+                conflict = client.post(
+                    "/billing/pilot-outcomes",
+                    headers=admin_headers,
+                    json=conflicting_payload,
+                )
+                self.assertEqual(conflict.status_code, 409)
+
+                query = "start_date=2025-01-15&end_date=2025-01-15"
+                report_response = client.get(
+                    f"/billing/value-report?{query}",
+                    headers=admin_headers,
+                )
+                self.assertEqual(report_response.status_code, 200)
+                report = report_response.json()
+                self.assertEqual(report["outcomes"]["recorded"], 1)
+                self.assertEqual(report["outcomes"]["net_minutes_saved"], 90)
+                self.assertEqual(report["outcomes"]["recommendation_acceptance_pct"], 100)
+                self.assertEqual(report["outcomes"]["success_rate_pct"], 100)
+                self.assertEqual(report["outcomes"]["support_minutes"], 15)
+                self.assertEqual(report["economics"]["customer_labor_value_usd"], 150)
+                self.assertGreater(report["economics"]["gross_margin_usd"], 0)
+                self.assertTrue(report["evidence_quality"]["has_cost_assumptions"])
+
+                exported = client.get(
+                    f"/billing/value-report.csv?{query}",
+                    headers=admin_headers,
+                )
+                self.assertEqual(exported.status_code, 200)
+                self.assertIn("text/csv", exported.headers["content-type"])
+                self.assertIn("outcomes_recorded", exported.text)
+                self.assertEqual(exported.headers["x-pilot-outcome-count"], "1")
+
+                self.assertEqual(
+                    client.get("/billing/value-report", headers=viewer_headers).status_code,
+                    403,
+                )
+                self.assertEqual(
+                    client.post(
+                        "/billing/pilot-outcomes",
+                        headers=viewer_headers,
+                        json=payload,
+                    ).status_code,
+                    403,
+                )
+                self.assertEqual(
+                    client.get(
+                        "/billing/value-report?start_date=2025-02-01&end_date=2025-01-01",
+                        headers=admin_headers,
+                    ).status_code,
+                    400,
+                )
+        finally:
+            os.environ["SRE_AUTH_ENABLED"] = "false"
+            os.environ.pop("SRE_ADMIN_API_KEY", None)
+            os.environ.pop("SRE_VIEWER_API_KEY", None)
+            os.environ.pop("SRE_PLAN_PRICE_USD_MONTHLY", None)
+            os.environ.pop("SRE_INFRA_COST_USD_MONTHLY", None)
+            os.environ.pop("SRE_CUSTOMER_HOURLY_COST_USD", None)
+            os.environ.pop("SRE_SUPPORT_HOURLY_COST_USD", None)
 
     def test_production_readiness_fails_closed(self):
         os.environ["SRE_ENVIRONMENT"] = "production"

@@ -8,7 +8,7 @@ SRE Agent 是一个面向服务运维场景的 AI Copilot 项目。
 
 当前版本的能力重点在运维分析、诊断辅助和执行前决策支持；对于 deploy / rollback，系统已经具备策略评估、dry-run、确认和审计能力，但最后一步还没有对接真实发布平台。
 
-产品化路线见 [PRODUCTIZATION_ROADMAP.md](docs/PRODUCTIZATION_ROADMAP.md)，开源参考见 [OPEN_SOURCE_REFERENCE_ANALYSIS.md](docs/OPEN_SOURCE_REFERENCE_ANALYSIS.md)，首个客户交付按 [PILOT_LAUNCH_CHECKLIST.md](docs/PILOT_LAUNCH_CHECKLIST.md) 验收。
+产品化路线见 [PRODUCTIZATION_ROADMAP.md](docs/PRODUCTIZATION_ROADMAP.md)，开源参考见 [OPEN_SOURCE_REFERENCE_ANALYSIS.md](docs/OPEN_SOURCE_REFERENCE_ANALYSIS.md)，首个客户交付按 [PILOT_LAUNCH_CHECKLIST.md](docs/PILOT_LAUNCH_CHECKLIST.md) 验收，价值证据按 [PILOT_VALUE_REPORTING.md](docs/PILOT_VALUE_REPORTING.md) 记录和导出。
 
 进程级烟测和当前并发数据见 [PERFORMANCE_BASELINE.md](docs/PERFORMANCE_BASELINE.md)。
 
@@ -563,6 +563,10 @@ payment-service 状态
 - `DELETE /workspace/api-keys/{key_id}`：撤销密钥；系统拒绝撤销最后一个工作区管理员密钥
 - `GET /billing/usage`：查询 UTC 自然月的持久化请求用量、额度与剩余额度
 - `GET /billing/usage.csv?month=YYYY-MM`：管理员导出逐事件用量、token、成本和调用元数据
+- `POST /billing/pilot-outcomes`：管理员按幂等键记录节省时间、建议采纳、结果成功和支持工时
+- `GET /billing/pilot-outcomes`：管理员查询指定月份或日期范围内的原始价值证据
+- `GET /billing/value-report`：管理员汇总活动、MTTR、变更结果、价值与单位经济性
+- `GET /billing/value-report.csv`：管理员导出单行周报/月报；支持 `month` 或 `start_date`/`end_date`
 
 
 ## 外部数据源约定

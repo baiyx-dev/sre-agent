@@ -63,6 +63,8 @@ SRE_PRODUCTION_WRITE_ENABLED=false
 8. Prometheus 可采集请求延迟、错误率、Incident、变更队列和月度用量指标。
 9. 恢复到隔离数据库后能查询最近 Incident、变更请求和审计记录。
 10. `/audit/verify` 在正常、保留清理 checkpoint 和恢复场景均为 true；隔离篡改一条审计后必须变为 false。
+11. 重放同一个 `/billing/pilot-outcomes` 幂等键不会重复计数，修改载荷重放返回 409。
+12. `/billing/value-report` 与 CSV 中的节省时间、支持工时、模型成本和毛利可从原始证据复算。
 
 ## 5. 价值与单位经济性
 
@@ -73,6 +75,8 @@ SRE_PRODUCTION_WRITE_ENABLED=false
 - 每次诊断的人工时长、模型调用数和推理成本。
 - 变更请求数、确认率、成功率、失败率和人工回退次数。
 - 周活跃 SRE、接入服务数、用量额度消耗和支持工时。
+
+每次完成诊断、Incident 或受控变更后，由管理员写入 `/billing/pilot-outcomes`；每周使用 `/billing/value-report.csv?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` 固化证据。上线前配置合同月费、月基础设施成本、客户全成本时薪和支持时薪；字段定义与示例见 [PILOT_VALUE_REPORTING.md](PILOT_VALUE_REPORTING.md)。报告使用 UTC，日期范围首尾均包含，最长 366 天。
 
 付费验证门槛建议为：连续 4 周节省的人力成本明显高于托管、推理、实施和支持总成本，并由客户负责人确认愿意续费或扩容。
 

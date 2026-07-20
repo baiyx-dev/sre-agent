@@ -21,6 +21,7 @@ MIGRATION_MANIFEST = (
     (5, "controlled_dead_letter_redrive", "2026-07-19-reliability-v5"),
     (6, "tamper_evident_audit_ledger", "2026-07-19-compliance-v6"),
     (7, "worker_heartbeat_readiness", "2026-07-19-reliability-v7"),
+    (8, "pilot_value_outcomes", "2026-07-20-commercial-v8"),
 )
 CURRENT_SCHEMA_VERSION = MIGRATION_MANIFEST[-1][0]
 _POSTGRES_MIGRATION_LOCK_ID = 7_361_904_211
@@ -657,6 +658,33 @@ def _initialize_schema(conn, cur):
     cur.execute("""
     CREATE INDEX IF NOT EXISTS idx_usage_events_workspace_time
     ON usage_events(workspace_id, occurred_at)
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS pilot_outcomes (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        category TEXT NOT NULL,
+        incident_id TEXT,
+        change_request_id TEXT,
+        service_name TEXT,
+        baseline_minutes INTEGER,
+        actual_minutes INTEGER,
+        support_minutes INTEGER NOT NULL DEFAULT 0,
+        recommendation_accepted INTEGER,
+        successful INTEGER,
+        notes TEXT,
+        recorded_by TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(workspace_id, idempotency_key)
+    )
+    """)
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_pilot_outcomes_workspace_time
+    ON pilot_outcomes(workspace_id, occurred_at)
     """)
     _safe_add_column("usage_events", "metadata_json", "TEXT")
 
